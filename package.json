@@ -20,5 +20,10 @@
   "bugs": {
     "url": "https://github.com/HelloNeptune/vueos/issues"
   },
-  "homepage": "https://github.com/HelloNeptune/vueos#readme"
+  "homepage": "https://github.com/HelloNeptune/vueos#readme",
+  "eslintConfig": {
+    "rules": {
+      "no-unused-vars": "off" 
+    }
+  }
 }

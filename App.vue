@@ -8,7 +8,7 @@
   >
     <!-- Taskbar -->
     <div ref="taskbar" class="taskbar">
-      <div class="vue">
+      <div class="vue" ref="vue">
         <svg
           version="1.1"
           viewBox="0 0 261.76 226.69"
@@ -41,21 +41,23 @@
         class="window"
         :class="{
           active: idx === activeWindow.idx,
-          minimized: window.minimized
+          minimized: minimizedWindows.find(mwId => mwId === window.id)
         }"
-        :style="getWindowStyles(idx)"
+        :style="windowUiVariables(idx)"
         v-on:mousedown="appWindowMouseDown(idx)"
       >
         <div class="controls">
-          <span class="title">Window {{ idx + 1 }}</span>
+          <span class="title">{{window.id}}</span>
           <div class="buttons">
             <span class="button fullscreen"></span>
             <span
-              ref="windowMinimize"
               class="button minimize"
-              @click="handleWindowMinimize(idx)"
+              @click="handleWindowMinimize(window.id)"
             ></span>
-            <span class="button close"></span>
+            <span
+              class="button close"
+              @click="handleWindowClose(window.id)"
+            ></span>
           </div>
         </div>
         <div class="content">
@@ -73,28 +75,39 @@ const MOUSE_STATES = {
   UP: "up",
   DOWN: "down"
 };
+const helpers = {
+  data() {
+    return {
+      helpers: {
+        http: {
 
-Vue.use({
-  install(Vue) {
-    Vue.prototype.helpers = {
-      http: {
+          /**
+           * @desc Makes an http get request
+           * @param url -
+           */
+          get(url) {
+            return fetch(url).then((res) => res.json());
+          }
+        },
+
         /**
-         * @desc
-         * @param {String} url -
+         * @desc Generates random ID
          */
-        get(url) {
-          return fetch(url).then((res) => res.json());
+        randid() {
+          return Math.random().toString(16).slice(2, -1);
         }
       }
-    };
+    }
   }
-});
+}
+
 
 /**
  * @Component: Static Article
  */
 const ArticleComponent = Vue.component("ArticleComponent", {
   template: '<div v-html="content"></div>',
+  mixins: [ helpers ],
   props: {
     text: {
       type: String,
@@ -114,6 +127,12 @@ const ArticleComponent = Vue.component("ArticleComponent", {
 });
 
 export default {
+
+  /**
+   * @Vue - Mixins
+   */
+  mixins: [ helpers ],
+
   /**
    * @Vue - Components
    * -
@@ -129,9 +148,18 @@ export default {
   data() {
     return {
       windows: [],
+      minimizedWindows: [],
       activeWindow: null,
       mouseState: MOUSE_STATES.UP,
       ui: {
+        default: {
+          window: {
+            minimizedAnimDuration: '0.15s',
+            minimizedWidth: 250,
+            minimizedHeight: 45,
+            minimizedGap: 20
+          },
+        },
         taskbar: {
           bounds: { x: null, y: null, w: null, h: null }
         }
@@ -154,6 +182,8 @@ export default {
     
     this.createWindow("Vue Explorer", ArticleComponent, 20, 20);
     this.createWindow("Vue Explorer", ArticleComponent, 40, 40);
+    this.createWindow("Vue Explorer", ArticleComponent, 60, 60);
+    this.createWindow("Vue Explorer", ArticleComponent, 80, 80);
     
     this.$nextTick(() => {
       this.setUiParameters();
@@ -194,7 +224,7 @@ export default {
      * @desc
      */
     appMousemove: function (e) {
-      if (this.mouseState == MOUSE_STATES.DOWN) {
+      if (this.mouseState == MOUSE_STATES.DOWN && !this.activeWindow.minimized) {
         this.activeWindow.offset.top = e.pageY - this.activeWindow.drag.y;
         this.activeWindow.offset.left = e.pageX - this.activeWindow.drag.x;
       }
@@ -229,6 +259,26 @@ export default {
       this.activeWindow = this.windows[idx];
     },
 
+     /**
+     * @desc Creates new window
+     */
+    createWindow(title, component, x, y) {
+      const window = {
+        title,
+        id: this.helpers.randid(),
+        minimized: false,
+        component: component,
+        drag: { x: 0, y: 0 },
+        offset: { top: y, left: x },
+        cssVariables: {}
+      };
+
+      const idx = this.windows.push(window) - 1;
+
+      this.windows[idx].idx = idx;
+      this.activeWindow = this.windows[idx];
+    },
+
     /**
      * @desc
      */
@@ -236,36 +286,69 @@ export default {
       const rectTaskbar = this.$refs.taskbar.getBoundingClientRect();
 
       this.ui.taskbar.bounds = {
-        x: `${rectTaskbar.x}px`,
-        y: `${rectTaskbar.y}px`,
-        w: `${rectTaskbar.width}px`,
-        h: `${rectTaskbar.height}px`
+        x: rectTaskbar.x,
+        y: rectTaskbar.y,
+        w: rectTaskbar.width,
+        h: rectTaskbar.height
       };
     },
 
     /**
-     * @desc Recursive css variable string builder from
+     * @desc Recursive css variable string or list builder from
      * nested objects list
      * @param obj - object list
      * @param prefix - prefix
      */
-    cssVarsStringGenerator(obj, prefix) {
-      let str = "";
+    cssVarsGenerator(obj, type = 'string') {
+          
+      /**
+       * @desc Example output: '--prop-val: val; --prop-val2: val'
+       */
+      const stringGenerator = (obj) => {
+        const generator = (obj, prefix) => {
+         
+          let str = '';
+          Object.keys(obj).forEach((key, idx) => {
+            const value = Object.values(obj)[idx];
+            
+            typeof value === "object" && value
+              ? (str += generator(
+                  value,
+                  prefix ? `${prefix}-${key}` : key
+                ))
+              : (str += prefix
+                  ? (!!value && '') || `--${prefix}-${key}:${value};`
+                  : (!!value && '') || `--${key}:${value};`);
+          });
+          return str;
+        }
+        return generator(obj);
+      }
 
-      Object.keys(obj).forEach((key, i) => {
-        const value = Object.values(obj)[i];
+      /**
+       * @desc Example output: { 
+       *  '--prop-val': val', 
+       *  '--prop-val2': 'val'
+       * }
+       */
+      const listGenerator = (obj) => {
+        const list = {}
+        const stringified = stringGenerator(Object.assign({}, obj))
 
-        typeof value === "object" && value
-          ? (str += this.cssVarsStringGenerator(
-              value,
-              prefix ? `${prefix}-${key}` : key
-            ))
-          : (str += prefix
-              ? (value && `--${prefix}-${key}:${value};`) || ""
-              : (value && `--${key}:${value};`) || "");
-      });
+        stringified.split(';').forEach((rule) => {
+          if (rule) {
+            const [ key, value ] = rule.split(':');
+            list[key] = value;
+          }
+        })
 
-      return str;
+        return list;
+      }
+
+      return type !== 'string' 
+        ? listGenerator(obj) 
+        : stringGenerator(obj)
+      ;
     },
 
     /**
@@ -279,30 +362,64 @@ export default {
           y: this.ui.taskbar.bounds.y,
           w: this.ui.taskbar.bounds.w,
           h: this.ui.taskbar.bounds.h
-        }
+        },
+        ...this.ui.default
       };
 
-      return this.cssVarsStringGenerator(variables);
+      return this.cssVarsGenerator(variables);
     },
 
     /**
-     * @desc Creates new window
+     * @desc Generates xy transform value for window
+     * position
      */
-    createWindow(title, component, x, y) {
-      const window = {
-        title,
-        minimized: false,
-        component: component,
-        drag: { x: 0, y: 0 },
-        offset: { top: y, left: x }
+    windowUiVariables(idx) {
+      const window = this.windows[idx];
+      let extra = {};
+      let posx = window.offset.left;
+      let posy = window.offset.top;
+
+      return {
+        transform: `translate(${posx}px, ${posy}px)`,
+        zIndex: idx === this.activeWindow.idx ? this.windows.length : idx,
+        ...this.cssVarsGenerator(window.cssVariables, 'list'),
+        ...this.cssVarsGenerator(extra, 'list')
       };
-
-      const idx = this.windows.push(window) - 1;
-
-      this.windows[idx].idx = idx;
-      this.activeWindow = this.windows[idx];
     },
 
+    /**
+     * @desc
+     * @param id -
+     */
+    organizeMinimizedWindows() {
+      const uiDefaults = this.ui.default.window;
+
+      this.minimizedWindows.forEach((mwId, idx) => {
+        const windowIdx = this.windows.findIndex(w => w.id === mwId);
+        const rectVue = this.$refs.vue.getBoundingClientRect(); 
+        const boundsTaskbar = this.ui.taskbar.bounds;
+
+        const baseX = (boundsTaskbar.w + boundsTaskbar.x)
+          - rectVue.width
+          - uiDefaults.minimizedWidth
+          - uiDefaults.minimizedGap;
+
+        const x = baseX 
+          - (uiDefaults.minimizedGap * idx) 
+          - (uiDefaults.minimizedWidth * idx);
+        
+        const y = (boundsTaskbar.y + (boundsTaskbar.h / 2))
+          - (uiDefaults.minimizedHeight / 2);
+
+        this.windows[windowIdx].cssVariables.minimized = {
+          x: `${x}px`,
+          y: `${y}px`,
+          width: `${uiDefaults.minimizedWidth}px`,
+          height: `${uiDefaults.minimizedHeight}px`
+        }
+      });
+    },
+   
     /**
      * @desc
      */
@@ -311,21 +428,36 @@ export default {
     },
 
     /**
-     * @desc Generates xy transform value for window
-     * position
+     * @desc
+     * @param id -
      */
-    getWindowStyles(idx) {
-      return {
-        transform: `translate(${this.windows[idx].offset.left}px, ${this.windows[idx].offset.top}px)`,
-        zIndex: idx === this.activeWindow.idx ? this.windows.length : idx
-      };
+    handleWindowMinimize(id) {
+      const minimizedIdx = this.minimizedWindows.findIndex(wmId => wmId === id);
+
+      minimizedIdx !== -1
+        ? this.$delete(this.minimizedWindows, minimizedIdx)
+        : this.minimizedWindows.push(id)
+      ;
+
+      this.organizeMinimizedWindows();
     },
 
     /**
      * @desc
+     * @param id -
      */
-    handleWindowMinimize() {
-      this.activeWindow.minimized = true;
+    handleWindowClose(id) {
+      const idx = this.windows.findIndex(w => w.id === id);
+      const minimizedIdx = this.minimizedWindows.findIndex(mwId => mwId === id);
+
+      this.$delete(this.windows, idx)
+
+      if (minimizedIdx !== -1) {
+        this.$delete(this.minimizedWindows, minimizedIdx)
+        this.organizeMinimizedWindows();
+      }
+
+      console.log(this.minimizedWindows)
     }
   }
 };
@@ -499,7 +631,11 @@ body {
 }
 
 .window.minimized {
-  transform: translateY(var(--taskbar-y)) !important;
+  overflow: hidden;
+  width: var(--minimized-width);
+  height: var(--minimized-height);
+  transition: all var(--window-minimizedAnimDuration) ease;
+  transform: translate(var(--minimized-x), var(--minimized-y)) !important;
 }
 
 /* ------ --------- ----------
