@@ -36,7 +36,7 @@
     <div class="windows">
       <div
         v-for="(window, idx) in windows"
-        v-bind:key="idx"
+        v-bind:key="window.id"
         ref="window"
         class="window"
         :class="{
@@ -216,6 +216,7 @@ export default {
     windowResized() {
       this.$nextTick(() => {
         this.setUiParameters();
+        this.organizeMinimizedWindows();
       });
     },
 
@@ -224,7 +225,7 @@ export default {
      * @desc
      */
     appMousemove: function (e) {
-      if (this.mouseState == MOUSE_STATES.DOWN && !this.activeWindow.minimized) {
+      if (this.mouseState == MOUSE_STATES.DOWN && !this.isWindowMinimized(this.activeWindow.id)) {
         this.activeWindow.offset.top = e.pageY - this.activeWindow.drag.y;
         this.activeWindow.offset.left = e.pageX - this.activeWindow.drag.x;
       }
@@ -379,12 +380,21 @@ export default {
       let posx = window.offset.left;
       let posy = window.offset.top;
 
+
       return {
         transform: `translate(${posx}px, ${posy}px)`,
         zIndex: idx === this.activeWindow.idx ? this.windows.length : idx,
         ...this.cssVarsGenerator(window.cssVariables, 'list'),
         ...this.cssVarsGenerator(extra, 'list')
       };
+    },
+
+    /**
+     * @desc
+     * @param id -
+     */
+    isWindowMinimized(id) {
+      return this.minimizedWindows.findIndex(wmId => wmId === id) !== -1
     },
 
     /**
@@ -541,6 +551,8 @@ body {
   background-color: var(--primary-bg-color);
   border-radius: var(--window-radius);
   box-shadow: var(--primary-shadow);
+  transition: all var(--window-minimizedAnimDuration) ease;
+  transform-origin: 50% 50%;
   @supports (backdrop-filter: blur(20px)) {
     backdrop-filter: blur(20px);
   }
@@ -634,7 +646,6 @@ body {
   overflow: hidden;
   width: var(--minimized-width);
   height: var(--minimized-height);
-  transition: all var(--window-minimizedAnimDuration) ease;
   transform: translate(var(--minimized-x), var(--minimized-y)) !important;
 }
 
