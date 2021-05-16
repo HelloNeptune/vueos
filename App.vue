@@ -41,15 +41,21 @@
         class="window"
         :class="{
           active: idx === activeWindow.idx,
-          minimized: minimizedWindows.find(mwId => mwId === window.id)
+          moving: idx === activeWindow.idx && window.moving,
+          minimized: minimizedWindows.find(mwId => mwId === window.id),
+          maximized: window.maximized
         }"
         :style="windowUiVariables(idx)"
         v-on:mousedown="appWindowMouseDown(idx)"
       >
         <div class="controls">
-          <span class="title">{{window.id}}</span>
+          <span class="title">{{window.title}}</span>
           <div class="buttons">
-            <span class="button fullscreen"></span>
+            <span
+              class="button fullscreen"
+              @click="handleWindowMaximize(idx)"
+            >
+            </span>
             <span
               class="button minimize"
               @click="handleWindowMinimize(window.id)"
@@ -180,10 +186,10 @@ export default {
   mounted() {
     this.globalEvents();
     
-    this.createWindow("Vue Explorer", ArticleComponent, 20, 20);
-    this.createWindow("Vue Explorer", ArticleComponent, 40, 40);
-    this.createWindow("Vue Explorer", ArticleComponent, 60, 60);
     this.createWindow("Vue Explorer", ArticleComponent, 80, 80);
+    this.createWindow("Vue Explorer", ArticleComponent, 100, 100);
+    this.createWindow("Vue Explorer", ArticleComponent, 120, 120);
+    this.createWindow("Vue Explorer", ArticleComponent, 140, 140);
     
     this.$nextTick(() => {
       this.setUiParameters();
@@ -228,6 +234,7 @@ export default {
       if (this.mouseState == MOUSE_STATES.DOWN && !this.isWindowMinimized(this.activeWindow.id)) {
         this.activeWindow.offset.top = e.pageY - this.activeWindow.drag.y;
         this.activeWindow.offset.left = e.pageX - this.activeWindow.drag.x;
+        this.activeWindow.moving = true;
       }
     },
 
@@ -250,6 +257,7 @@ export default {
     appMouseup() {
       this.mouseState = MOUSE_STATES.UP;
       this.activeWindow.offset.top < -20 && (this.activeWindow.offset.top = 0);
+      this.activeWindow.moving = false;
     },
 
     /**
@@ -257,6 +265,7 @@ export default {
      * @desc
      */
     appWindowMouseDown(idx) {
+      console.log(this.activeWindow.idx, idx)
       this.activeWindow = this.windows[idx];
     },
 
@@ -267,6 +276,7 @@ export default {
       const window = {
         title,
         id: this.helpers.randid(),
+        moving: false,
         minimized: false,
         component: component,
         drag: { x: 0, y: 0 },
@@ -284,6 +294,7 @@ export default {
      * @desc
      */
     setUiParameters() {
+      console.log(this.$refs.taskbar)
       const rectTaskbar = this.$refs.taskbar.getBoundingClientRect();
 
       this.ui.taskbar.bounds = {
@@ -404,19 +415,35 @@ export default {
     organizeMinimizedWindows() {
       const uiDefaults = this.ui.default.window;
 
+      /**
+       * @desc
+       * @param parentWidth -
+       */
+      const calculateWidth = (parentWidth) => {
+        const defaultWidth = uiDefaults.minimizedWidth + uiDefaults.minimizedGap; 
+        const minimizedWindows = this.minimizedWindows.length;
+        
+        if (defaultWidth * minimizedWindows > parentWidth) {
+          return (parentWidth / minimizedWindows) - (uiDefaults.minimizedGap);
+        }
+
+        return uiDefaults.minimizedWidth;
+      };
+
       this.minimizedWindows.forEach((mwId, idx) => {
         const windowIdx = this.windows.findIndex(w => w.id === mwId);
         const rectVue = this.$refs.vue.getBoundingClientRect(); 
         const boundsTaskbar = this.ui.taskbar.bounds;
+        const height = uiDefaults.minimizedHeight;
+        const width = calculateWidth(boundsTaskbar.w - rectVue.width);
 
-        const baseX = (boundsTaskbar.w + boundsTaskbar.x)
-          - rectVue.width
-          - uiDefaults.minimizedWidth
+        const baseX = boundsTaskbar.x + boundsTaskbar.w - rectVue.width
+          - width
           - uiDefaults.minimizedGap;
 
         const x = baseX 
           - (uiDefaults.minimizedGap * idx) 
-          - (uiDefaults.minimizedWidth * idx);
+          - (width * idx);
         
         const y = (boundsTaskbar.y + (boundsTaskbar.h / 2))
           - (uiDefaults.minimizedHeight / 2);
@@ -424,8 +451,8 @@ export default {
         this.windows[windowIdx].cssVariables.minimized = {
           x: `${x}px`,
           y: `${y}px`,
-          width: `${uiDefaults.minimizedWidth}px`,
-          height: `${uiDefaults.minimizedHeight}px`
+          width: `${width}px`,
+          height: `${height}px`
         }
       });
     },
@@ -454,6 +481,15 @@ export default {
 
     /**
      * @desc
+     * @param idx -
+     */
+    handleWindowMaximize(idx) {
+      this.windows[idx].maximized = !this.windows[idx].maximized;
+      console.log(idx)
+    },
+
+    /**
+     * @desc
      * @param id -
      */
     handleWindowClose(id) {
@@ -466,8 +502,6 @@ export default {
         this.$delete(this.minimizedWindows, minimizedIdx)
         this.organizeMinimizedWindows();
       }
-
-      console.log(this.minimizedWindows)
     }
   }
 };
@@ -578,9 +612,15 @@ body {
     color: #ffffff;
     pointer-events: none;
     user-select: none;
+    flex: 1 1 50%;
+    max-width: 50%;
+    text-overflow: ellipsis;
+    overflow: hidden;
   }
   .buttons {
     display: flex;
+    flex: 1 1 50%;
+    max-width: 50%;
     justify-content: flex-end;
   }
   .buttons .button {
@@ -647,6 +687,23 @@ body {
   width: var(--minimized-width);
   height: var(--minimized-height);
   transform: translate(var(--minimized-x), var(--minimized-y)) !important;
+}
+
+.window.maximized {
+  $edge-gap: 10px;
+  width: calc(100vw - #{$edge-gap * 2});
+  height: calc(100vh - #{$edge-gap * 2});
+  transform: translate($edge-gap, $edge-gap) !important;
+  z-index: 999999;
+  .content {
+    width: 100% !important;
+    height: calc(100% - 50px) !important;
+    resize: none;
+  }
+}
+
+.window.moving {
+  transition: none !important;
 }
 
 /* ------ --------- ----------
