@@ -8,7 +8,7 @@
   >
     <!-- Taskbar -->
     <div ref="taskbar" class="taskbar">
-      <div class="vue" ref="vue">
+      <div class="vue" ref="vue" @click="handleVueClick()">
         <svg
           version="1.1"
           viewBox="0 0 261.76 226.69"
@@ -39,23 +39,24 @@
         v-bind:key="window.id"
         ref="window"
         class="window"
-        :class="{
-          active: idx === activeWindow.idx,
-          moving: idx === activeWindow.idx && window.moving,
-          minimized: minimizedWindows.find(mwId => mwId === window.id),
-          maximized: window.maximized
-        }"
+        :v-id="window.id"
         :style="windowUiVariables(idx)"
-        v-on:mousedown="appWindowMouseDown(idx)"
+        :class="{
+          active: window.id === activeWindow.id,
+          maximized: window.maximized,
+          minimized: minimizedWindows.find((mwId) => mwId === window.id),
+          'user-interacting':
+            window.id === activeWindow.id && window.userInteracting
+        }"
+        v-on:mousedown="appWindowMouseDown(window.id)"
       >
         <div class="controls">
-          <span class="title">{{window.title}}</span>
+          <span class="title">{{ window.title }}</span>
           <div class="buttons">
             <span
               class="button fullscreen"
-              @click="handleWindowMaximize(idx)"
-            >
-            </span>
+              @click="handleWindowMaximize(window.id)"
+            ></span>
             <span
               class="button minimize"
               @click="handleWindowMinimize(window.id)"
@@ -66,8 +67,13 @@
             ></span>
           </div>
         </div>
-        <div class="content">
-          <component :is="window.component" />
+        <div
+          class="content"
+          v-if="true && handleWindowContentInit(window.id)"
+          v-on:mouseup="handleWindowContentMouseUp(window.id)"
+          v-on:mousedown="handleWindowContentMouseDown(window.id)"
+        >
+          <component :is="window.component" :window-id="window.id" />
         </div>
       </div>
     </div>
@@ -77,16 +83,21 @@
 <script>
 import Vue from 'vue/dist/vue.esm.js';
 
+const parse = JSON.parse;
+const stringify = JSON.stringify;
 const MOUSE_STATES = {
   UP: "up",
   DOWN: "down"
 };
+const fileTypes = {
+  vuedit: 'vuedit'
+}
+
 const helpers = {
   data() {
     return {
       helpers: {
         http: {
-
           /**
            * @desc Makes an http get request
            * @param url -
@@ -103,17 +114,122 @@ const helpers = {
           return Math.random().toString(16).slice(2, -1);
         }
       }
+    };
+  }
+};
+
+const system = {
+  methods: {
+    system(app) {
+      return {
+        /**
+         * @desc
+         * @param fileType -
+         * @param fileName -
+         * @param content -
+         */
+        saveFile(fileType, fileName, content) {
+          localStorage.setItem(`file-${app.windowId}`, btoa(encodeURIComponent(stringify({
+            fileType,
+            fileName,
+            content
+          }))));
+        },
+
+        /**
+         * @desc
+         */
+        getFiles() {
+          const files = [];
+          let f = 0;
+
+          do {
+            let file = null;
+            const key = localStorage.key(f);
+            const record = key && key.includes('file-') && localStorage.getItem(key);
+
+            if (record) {
+              try {
+                file = parse(decodeURIComponent(atob(record)))
+              } catch(e) {
+                console.warn('File cannot load(!)')
+              }
+
+              file && files.push(file);
+              f++;
+            }
+            else f = null;
+          } while (f !== null)
+
+          return files;
+        }
+      }
     }
   }
 }
 
+/**
+ * @Component: Static Article
+ * @from @souporserious https://codepen.io/souporserious/pen/xBpEj
+ */
+const EditorComponent = Vue.component("EditorComponent", {
+  template: `
+    <div component="Editor">
+      <div class="editor-controls">
+        <a href="javascript:void(0);" data-role='bold' v-on:click="execute('bold')">B</a>
+        <a href="javascript:void(0);" data-role='italic' v-on:click="execute('italic')">I</a>
+        <a href="javascript:void(0);" data-role='underline' v-on:click="execute('underline')">U</a>
+        <a href="javascript:void(0);" data-role='justifyleft' v-on:click="execute('justifyleft')"><i class="menu-left"></i></a>
+        <a href="javascript:void(0);" data-role='justifycenter' v-on:click="execute('justifycenter')"><i class="menu-center"></i></a>
+        <a href="javascript:void(0);" data-role='justifyright' v-on:click="execute('justifyright')"><i class="menu-right"></i></a>
+        <a v-on:click="save" class="save">save</a>
+      </div>
+      <div ref="content" class="editor-content" contenteditable>
+        <b>Let's make a statement!</b>
+        <br>
+        <i>Bu bir italik metin.</i>
+        <br>
+        <u>Çok önemli bir uyarı.</u>
+      </div>
+    </div>
+  `,
+  mixins: [helpers, system],
+  props: {
+    windowId: {
+      type: String,
+      default: null
+    }
+  },
+  data() {
+    return {
+      style: {}
+    };
+  },
+  /**
+   * @Vue - methods
+   */
+  methods: {
+    save() {
+      const content = this.$refs.content.innerHTML;
+      this.system(this).saveFile(fileTypes.vuedit, 'test', content);
+    },
+    execute(command) {
+      document.execCommand(command, false);
+    }
+  }
+});
 
 /**
  * @Component: Static Article
+ * @from @ovens https://codepen.io/ovens/pen/EeprWN
  */
 const ArticleComponent = Vue.component("ArticleComponent", {
-  template: '<div v-html="content"></div>',
-  mixins: [ helpers ],
+  template: `
+    <div>
+      <div v-bind:style="style.p" v-for="(v, idx) in [0,0,0,0,0,0]" v-html="sentence(idx)">
+      </div>
+    </div>`,
+  mixins: [helpers],
   props: {
     text: {
       type: String,
@@ -122,22 +238,62 @@ const ArticleComponent = Vue.component("ArticleComponent", {
   },
   data() {
     return {
-      content: ""
+      nouns: ["bird", "clock", "boy", "plastic", "duck", "teacher", "old lady", "professor", "hamster", "dog"],
+      verbs: ["kicked", "ran", "flew", "dodged", "sliced", "rolled", "died", "breathed", "slept", "killed"],
+      adjectives: ["beautiful", "lazy", "professional", "lovely", "dumb", "rough", "soft", "hot", "vibrating", "slimy"],
+      adverbs: ["slowly", "elegantly", "precisely", "quickly", "sadly", "humbly", "proudly", "shockingly", "calmly", "passionately"],
+      preposition: ["down", "into", "up", "on", "upon", "below", "above", "through", "across", "towards"],
+      content: '',
+      style: {
+        p: {
+          color: '#efefef',
+          fontWeight: 300,
+          fontSize: '13px',
+          marginBottom: '10px',
+          lineHeight: '1.8em'
+        }
+      }
     };
   },
-  mounted() {
-    this.helpers.http
-      .get("https://www.randomtext.me/api/lorem/p-8/20-83")
-      .then((res) => (this.content = res.text_out));
+  /**
+   * @Vue - methods
+   */
+  methods: {
+    rand(max) {
+      return Math.floor(Math.random() * (max)) + 1;
+    },
+    sentence(idx) {
+      let text = '';
+      const totalWord = this.rand(5);
+
+      for (let s = 0; s <= totalWord; s++) {
+        const rand1 = this.rand(10);
+        const rand2 = this.rand(10);
+        const rand3 = this.rand(10);
+        const rand4 = this.rand(10);
+        const rand5 = this.rand(10);
+        const rand6 = this.rand(10);
+
+        text += (idx === 0 ? 'The ' : '') + 
+          this.adjectives[rand1] + " " + this.nouns[rand2] + " " + 
+          this.adverbs[rand3] + " " + this.verbs[rand4] + " because some " + 
+          this.nouns[rand1] + " " + this.adverbs[rand1] + " " + 
+          this.verbs[rand1] + " " + this.preposition[rand1] + " a " + 
+          this.adjectives[rand2] + " " + this.nouns[rand5] + " which, became a " + 
+          this.adjectives[rand3] + ", " + this.adjectives[rand4] + " " + 
+          this.nouns[rand6] + "."
+      }
+
+      return text;
+    }
   }
 });
 
 export default {
-
   /**
    * @Vue - Mixins
    */
-  mixins: [ helpers ],
+  mixins: [helpers, system],
 
   /**
    * @Vue - Components
@@ -155,16 +311,22 @@ export default {
     return {
       windows: [],
       minimizedWindows: [],
+      windowFocusSequence: [],
       activeWindow: null,
       mouseState: MOUSE_STATES.UP,
       ui: {
         default: {
+          taskbar: {
+            verticalGap: 20,
+            horizontalGap: 20,
+            height: 60
+          },
           window: {
-            minimizedAnimDuration: '0.15s',
+            minimizedAnimDuration: "0.35s",
             minimizedWidth: 250,
             minimizedHeight: 45,
             minimizedGap: 20
-          },
+          }
         },
         taskbar: {
           bounds: { x: null, y: null, w: null, h: null }
@@ -180,17 +342,39 @@ export default {
   computed: {},
 
   /**
+   * @Vue - Watch
+   * -
+   */
+  watch: {
+    /**
+     * @Watch
+     * @desc update window focues sequence every
+     * activeWindow change
+     */
+    activeWindow(newValue, oldValue) {
+      newValue && this.updateWindowFocusSequence(newValue.id);
+    }
+  },
+
+  /**
+   * @Vue - beforeCreate
+   */
+  created() {
+    const files = this.system(this).getFiles();
+    console.log(files);
+  },
+
+  /**
    * @Vue - Mounted
    * -
    */
   mounted() {
     this.globalEvents();
-    
-    this.createWindow("Vue Explorer", ArticleComponent, 80, 80);
-    this.createWindow("Vue Explorer", ArticleComponent, 100, 100);
-    this.createWindow("Vue Explorer", ArticleComponent, 120, 120);
-    this.createWindow("Vue Explorer", ArticleComponent, 140, 140);
-    
+
+    this.createWindow("Another Story", ArticleComponent, 100, 100);
+    this.createWindow("Another Story", ArticleComponent, 120, 120);
+    this.createWindow("Editor", EditorComponent, 140, 140);
+
     this.$nextTick(() => {
       this.setUiParameters();
     });
@@ -212,14 +396,14 @@ export default {
        *
        * [ Native Event: Resize --> window ]
        */
-      window.addEventListener("resize", this.windowResized);
+      window.addEventListener("resize", this.handleBrowserWindowResize);
     },
 
     /**
      * @Event
      * @desc Window Resize
      */
-    windowResized() {
+    handleBrowserWindowResize() {
       this.$nextTick(() => {
         this.setUiParameters();
         this.organizeMinimizedWindows();
@@ -231,10 +415,14 @@ export default {
      * @desc
      */
     appMousemove: function (e) {
-      if (this.mouseState == MOUSE_STATES.DOWN && !this.isWindowMinimized(this.activeWindow.id)) {
+      if (
+        this.activeWindow &&
+        this.mouseState == MOUSE_STATES.DOWN &&
+        !this.isWindowMinimized(this.activeWindow.id) &&
+        !this.isWindowMaximized(this.activeWindow.id)
+      ) {
         this.activeWindow.offset.top = e.pageY - this.activeWindow.drag.y;
         this.activeWindow.offset.left = e.pageX - this.activeWindow.drag.x;
-        this.activeWindow.moving = true;
       }
     },
 
@@ -255,29 +443,108 @@ export default {
      * @desc
      */
     appMouseup() {
+      if (!this.activeWindow) return;
+
       this.mouseState = MOUSE_STATES.UP;
       this.activeWindow.offset.top < -20 && (this.activeWindow.offset.top = 0);
-      this.activeWindow.moving = false;
+      this.activeWindow.userInteracting = false;
     },
 
     /**
      * @Event
      * @desc
      */
-    appWindowMouseDown(idx) {
-      console.log(this.activeWindow.idx, idx)
-      this.activeWindow = this.windows[idx];
+    appWindowMouseDown(id) {
+      const window = this.windows.find((w) => w.id === id);
+      this.activeWindow = window;
+      this.activeWindow.userInteracting = true;
     },
 
-     /**
+    /**
+     * @desc
+     * @param id -
+     */
+    handleWindowContentMouseDown(id) {
+      const window = this.windows.find((w) => w.id === id);
+      window.userInteracting = true;
+    },
+
+    /**
+     * @desc
+     * @param id -
+     */
+    handleWindowContentMouseUp(id) {
+      const window = this.windows.find((w) => w.id === id);
+      window.userInteracting = false;
+    },
+
+    /**
+     * @Event
+     * @desc
+     */
+    handleVueClick() {
+      this.createWindow(this.helpers.randid(), ArticleComponent, 120, 120);
+    },
+
+    /**
+     * @Event
+     * @desc
+     */
+    handleWindowResize(record, window, contentDomRef) {
+      window.cssVariables.bounds = {
+        width: contentDomRef.offsetWidth,
+        height: contentDomRef.offsetHeight
+      };
+
+      this.$forceUpdate();
+    },
+
+    /**
+     * @Event
+     * @desc
+     */
+    handleWindowContentInit(id) {
+      if (!this.$refs.window) return true;
+      const window = this.windows.find((w) => w.id === id);
+
+      if (window && !window.resizeObserver) {
+        const domRef = this.$refs.window.find(
+          (w) => w.getAttribute("v-id") === id
+        );
+        const content = domRef && domRef.querySelector(".content");
+
+        if (!domRef || !content) return true;
+
+        /**
+         *
+         * [Observer: Mutation --> window ]
+         */
+        window.resizeObserver = new MutationObserver((record) =>
+          this.handleWindowResize(record, window, content)
+        );
+
+        window.resizeObserver.observe(content, {
+          attributes: true,
+          attributeFilter: ["style"]
+        });
+
+        if (!window.cssVariables.bounds) {
+          //this.handleWindowResize(null, window, domRef);
+        }
+      }
+
+      return true;
+    },
+
+    /**
      * @desc Creates new window
      */
     createWindow(title, component, x, y) {
       const window = {
         title,
         id: this.helpers.randid(),
-        moving: false,
         minimized: false,
+        userInteracting: false,
         component: component,
         drag: { x: 0, y: 0 },
         offset: { top: y, left: x },
@@ -288,13 +555,13 @@ export default {
 
       this.windows[idx].idx = idx;
       this.activeWindow = this.windows[idx];
+      this.updateWindowFocusSequence(window.id);
     },
 
     /**
      * @desc
      */
     setUiParameters() {
-      console.log(this.$refs.taskbar)
       const rectTaskbar = this.$refs.taskbar.getBoundingClientRect();
 
       this.ui.taskbar.bounds = {
@@ -311,56 +578,48 @@ export default {
      * @param obj - object list
      * @param prefix - prefix
      */
-    cssVarsGenerator(obj, type = 'string') {
-          
+    cssVarsGenerator(obj, type = "string") {
       /**
        * @desc Example output: '--prop-val: val; --prop-val2: val'
        */
       const stringGenerator = (obj) => {
         const generator = (obj, prefix) => {
-         
-          let str = '';
+          let str = "";
           Object.keys(obj).forEach((key, idx) => {
             const value = Object.values(obj)[idx];
-            
+
             typeof value === "object" && value
-              ? (str += generator(
-                  value,
-                  prefix ? `${prefix}-${key}` : key
-                ))
+              ? (str += generator(value, prefix ? `${prefix}-${key}` : key))
               : (str += prefix
-                  ? (!!value && '') || `--${prefix}-${key}:${value};`
-                  : (!!value && '') || `--${key}:${value};`);
+                  ? (!!value && "") || `--${prefix}-${key}:${value};`
+                  : (!!value && "") || `--${key}:${value};`);
           });
           return str;
-        }
+        };
         return generator(obj);
-      }
+      };
 
       /**
-       * @desc Example output: { 
-       *  '--prop-val': val', 
+       * @desc Example output: {
+       *  '--prop-val': val',
        *  '--prop-val2': 'val'
        * }
        */
       const listGenerator = (obj) => {
-        const list = {}
-        const stringified = stringGenerator(Object.assign({}, obj))
+        const list = {};
+        const stringified = stringGenerator(Object.assign({}, obj));
 
-        stringified.split(';').forEach((rule) => {
+        stringified.split(";").forEach((rule) => {
           if (rule) {
-            const [ key, value ] = rule.split(':');
+            const [key, value] = rule.split(":");
             list[key] = value;
           }
-        })
+        });
 
         return list;
-      }
+      };
 
-      return type !== 'string' 
-        ? listGenerator(obj) 
-        : stringGenerator(obj)
-      ;
+      return type !== "string" ? listGenerator(obj) : stringGenerator(obj);
     },
 
     /**
@@ -391,12 +650,11 @@ export default {
       let posx = window.offset.left;
       let posy = window.offset.top;
 
-
       return {
         transform: `translate(${posx}px, ${posy}px)`,
-        zIndex: idx === this.activeWindow.idx ? this.windows.length : idx,
-        ...this.cssVarsGenerator(window.cssVariables, 'list'),
-        ...this.cssVarsGenerator(extra, 'list')
+        zIndex: this.windowFocusSequence.findIndex((wId) => wId === window.id),
+        ...this.cssVarsGenerator(window.cssVariables, "list"),
+        ...this.cssVarsGenerator(extra, "list")
       };
     },
 
@@ -405,7 +663,31 @@ export default {
      * @param id -
      */
     isWindowMinimized(id) {
-      return this.minimizedWindows.findIndex(wmId => wmId === id) !== -1
+      return this.minimizedWindows.findIndex((wmId) => wmId === id) !== -1;
+    },
+
+    /**
+     * @desc
+     * @param id -
+     */
+    isWindowMaximized(id) {
+      const idx = this.windows.findIndex((w) => w.id === id);
+      return this.windows[idx].maximized;
+    },
+
+    /**
+     * @desc
+     * @param Id -
+     */
+    updateWindowFocusSequence(id) {
+      const windowIdx = this.windowFocusSequence.findIndex((wId) => wId === id);
+
+      if (windowIdx === -1) {
+        this.windowFocusSequence.push(id);
+      } else {
+        this.$delete(this.windowFocusSequence, windowIdx);
+        this.windowFocusSequence.push(id);
+      }
     },
 
     /**
@@ -420,43 +702,47 @@ export default {
        * @param parentWidth -
        */
       const calculateWidth = (parentWidth) => {
-        const defaultWidth = uiDefaults.minimizedWidth + uiDefaults.minimizedGap; 
+        const defaultWidth =
+          uiDefaults.minimizedWidth + uiDefaults.minimizedGap;
         const minimizedWindows = this.minimizedWindows.length;
-        
+
         if (defaultWidth * minimizedWindows > parentWidth) {
-          return (parentWidth / minimizedWindows) - (uiDefaults.minimizedGap);
+          return parentWidth / minimizedWindows - uiDefaults.minimizedGap;
         }
 
         return uiDefaults.minimizedWidth;
       };
 
       this.minimizedWindows.forEach((mwId, idx) => {
-        const windowIdx = this.windows.findIndex(w => w.id === mwId);
-        const rectVue = this.$refs.vue.getBoundingClientRect(); 
+        const windowIdx = this.windows.findIndex((w) => w.id === mwId);
+        const rectVue = this.$refs.vue.getBoundingClientRect();
         const boundsTaskbar = this.ui.taskbar.bounds;
         const height = uiDefaults.minimizedHeight;
         const width = calculateWidth(boundsTaskbar.w - rectVue.width);
 
-        const baseX = boundsTaskbar.x + boundsTaskbar.w - rectVue.width
-          - width
-          - uiDefaults.minimizedGap;
+        const baseX =
+          boundsTaskbar.x +
+          boundsTaskbar.w -
+          rectVue.width -
+          width -
+          uiDefaults.minimizedGap;
 
-        const x = baseX 
-          - (uiDefaults.minimizedGap * idx) 
-          - (width * idx);
-        
-        const y = (boundsTaskbar.y + (boundsTaskbar.h / 2))
-          - (uiDefaults.minimizedHeight / 2);
+        const x = baseX - uiDefaults.minimizedGap * idx - width * idx;
+
+        const y =
+          boundsTaskbar.y +
+          boundsTaskbar.h / 2 -
+          uiDefaults.minimizedHeight / 2;
 
         this.windows[windowIdx].cssVariables.minimized = {
           x: `${x}px`,
           y: `${y}px`,
           width: `${width}px`,
           height: `${height}px`
-        }
+        };
       });
     },
-   
+
     /**
      * @desc
      */
@@ -468,24 +754,56 @@ export default {
      * @desc
      * @param id -
      */
-    handleWindowMinimize(id) {
-      const minimizedIdx = this.minimizedWindows.findIndex(wmId => wmId === id);
+    toggleWindowMinimize(id) {
+      const idx = this.windows.findIndex((w) => w.id === id);
+      const minimizedIdx = this.minimizedWindows.findIndex(
+        (wmId) => wmId === id
+      );
 
-      minimizedIdx !== -1
-        ? this.$delete(this.minimizedWindows, minimizedIdx)
-        : this.minimizedWindows.push(id)
-      ;
+      if (this.windows[idx].maximized) {
+        this.toggleWindowMaximize(id);
+      }
+
+      if (minimizedIdx !== -1) {
+        this.$delete(this.minimizedWindows, minimizedIdx);
+      }
+      else {
+        this.minimizedWindows.push(id);
+      }
 
       this.organizeMinimizedWindows();
     },
 
     /**
      * @desc
+     * @param id -
+     */
+    toggleWindowMaximize(id) {
+      const idx = this.windows.findIndex((w) => w.id === id);
+      const isMinimized = this.isWindowMinimized(this.activeWindow.id);
+
+      if (isMinimized) {
+        this.handleWindowMinimize(id);
+      }
+
+      this.windows[idx].maximized = !this.windows[idx].maximized;
+      this.$forceUpdate();
+    },
+
+    /**
+     * @desc
+     * @param id -
+     */
+    handleWindowMinimize(id) {
+      this.toggleWindowMinimize(id);
+    },
+
+    /**
+     * @desc
      * @param idx -
      */
-    handleWindowMaximize(idx) {
-      this.windows[idx].maximized = !this.windows[idx].maximized;
-      console.log(idx)
+    handleWindowMaximize(id) {
+      this.toggleWindowMaximize(id);
     },
 
     /**
@@ -493,14 +811,57 @@ export default {
      * @param id -
      */
     handleWindowClose(id) {
-      const idx = this.windows.findIndex(w => w.id === id);
-      const minimizedIdx = this.minimizedWindows.findIndex(mwId => mwId === id);
+      const idx = this.windows.findIndex((w) => w.id === id);
+      const minimizedIdx = this.minimizedWindows.findIndex(
+        (mwId) => mwId === id
+      );
+      const focusSequenceIdx = this.windowFocusSequence.findIndex(
+        (wfsId) => wfsId === id
+      );
 
-      this.$delete(this.windows, idx)
+      this.$delete(this.windows, idx);
+
+      if (focusSequenceIdx !== -1) {
+        this.$delete(this.windowFocusSequence, focusSequenceIdx);
+      }
 
       if (minimizedIdx !== -1) {
-        this.$delete(this.minimizedWindows, minimizedIdx)
+        this.$delete(this.minimizedWindows, minimizedIdx);
         this.organizeMinimizedWindows();
+      }
+
+      if (!this.windows.length) {
+        this.activeWindow = null;
+        return;
+      }
+
+      // Make last focused window active
+      // #
+      if (!!this.windows.length && this.activeWindow.id === id) {
+        const lastFocusedWindow = this.windowFocusSequence.slice(-1).pop();
+        const availableWindows = this.windows.filter(
+          (w) => !this.isWindowMinimized(w.id)
+        );
+
+        // If all windows are minimized
+        // set last focused window active
+        if (!availableWindows.length) {
+          this.setActiveWindow(
+            this.windows.findIndex((w) => w.id === lastFocusedWindow)
+          );
+          return;
+        }
+
+        // Otherwise set last focused
+        // window in not minimized windows
+        const targetWindow = this.windowFocusSequence
+          .filter((wId) => availableWindows.find((aW) => aW.id === wId))
+          .slice(-1)
+          .pop();
+        
+        this.setActiveWindow(
+          this.windows.findIndex((w) => w.id === targetWindow )
+        );
       }
     }
   }
@@ -542,6 +903,7 @@ $z: 8888;
   --primary-bg-color: rgba(16, 18, 27, 0.7);
   --primary-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.75);
   --window-radius: 18px;
+  --vueos-transition-fn: cubic-bezier(0.19, 1, 0.22, 1);
 }
 
 * {
@@ -585,8 +947,12 @@ body {
   background-color: var(--primary-bg-color);
   border-radius: var(--window-radius);
   box-shadow: var(--primary-shadow);
-  transition: all var(--window-minimizedAnimDuration) ease;
-  transform-origin: 50% 50%;
+  transition: transform 0.5s var(--vueos-transition-fn),
+    width 0.35s var(--vueos-transition-fn) !important;
+  transform-origin: 0% 100%;
+  width: calc((var(--bounds-width) * 1px));
+  height: calc((var(--bounds-height) * 1px) + 45px);
+  overflow: hidden;
   @supports (backdrop-filter: blur(20px)) {
     backdrop-filter: blur(20px);
   }
@@ -600,6 +966,7 @@ body {
     * ------ --------- --------
     */
 .window .controls {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -612,16 +979,18 @@ body {
     color: #ffffff;
     pointer-events: none;
     user-select: none;
-    flex: 1 1 50%;
-    max-width: 50%;
+    width: calc(100% - 70px);
     text-overflow: ellipsis;
     overflow: hidden;
   }
   .buttons {
+    position: absolute;
+    top: 50%;
+    right: 0;
     display: flex;
-    flex: 1 1 50%;
-    max-width: 50%;
     justify-content: flex-end;
+    width: 70px;
+    transform: translateY(-50%);
   }
   .buttons .button {
     display: block;
@@ -691,9 +1060,11 @@ body {
 
 .window.maximized {
   $edge-gap: 10px;
+  $top: calc((var(--taskbar-verticalGap) * 1px * 2) + (var(--taskbar-height) * 1px));
+  $left: $edge-gap;
   width: calc(100vw - #{$edge-gap * 2});
-  height: calc(100vh - #{$edge-gap * 2});
-  transform: translate($edge-gap, $edge-gap) !important;
+  height: calc(100vh - (#{$edge-gap * 2} + (calc((var(--taskbar-verticalGap) * 1px * 2) + (var(--taskbar-height) * 1px)))));
+  transform: translateY($top) translateX($left) !important;
   z-index: 999999;
   .content {
     width: 100% !important;
@@ -702,7 +1073,7 @@ body {
   }
 }
 
-.window.moving {
+.window.user-interacting {
   transition: none !important;
 }
 
@@ -711,6 +1082,11 @@ body {
     * ------ --------- --------
     */
 .taskbar {
+  position: absolute;
+  top: calc(var(--taskbar-verticalGap) * 1px);
+  left: calc(var(--taskbar-horizontalGap) *1px);
+  width: calc(100% - (var(--taskbar-horizontalGap) * 1px) * 2);
+  height: calc(var(--taskbar-height) * 1px);
   display: flex;
   justify-content: flex-end;
 }
@@ -790,6 +1166,103 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
   100% {
     box-shadow: 0 -20px 30px -10px transparentize($vue-anim-primary-color, 0%);
     transform: scaleY(1.1);
+  }
+}
+
+[component="Editor"] {
+  $controls-color: #ADB5B9;
+  $border-color: rgba(255, 255, 255, 0.1);
+  margin: 0 -10px;
+  height: 100%;
+  .editor-controls {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 35px;
+    border: 1px solid $border-color;
+    border-bottom: none;
+    border-radius: 3px 3px 0 0;
+    background: #292535;
+    white-space: nowrap;
+    overflow: hidden;
+    a {
+      display: inline-block;
+      width: 35px;
+      height: 35px;
+      vertical-align: top;
+      line-height: 38px;
+      text-decoration: none;
+      text-align: center;
+      cursor: pointer;
+      color: $controls-color;
+    }
+    [data-role="bold"] {
+      font-weight: bold;
+    }
+    [data-role="italic"] {
+      font-style: italic;
+    }
+    [data-role="underline"] {
+      text-decoration: underline;
+    }
+  }
+
+  [class^="menu"] {
+    position: relative;
+    top: 48%;
+    
+    display: block;
+    width: 65%;
+    height: 2px;
+    margin: 0 auto;
+    background: $controls-color;
+    
+    &:before {
+      @extend [class^="menu"];
+      content: '';
+      top: -5px;
+      width: 80%;
+    }
+    &:after {
+      @extend [class^="menu"];
+      content: '';
+      top: 3px;
+      width: 80%;
+    }
+  }
+
+  .menu-left {
+    &:before, &:after {
+      margin-right: 4px;
+    }
+  }
+  .menu-right {
+    &:before, &:after {
+      margin-left: 4px;
+    }
+  }
+
+  .save {
+    margin-left: auto;
+    margin-right: 10px;
+  }
+  
+  .editor-content {
+    max-width: 100%;
+    min-width: 100%;
+    min-height: calc( 100% - 35px );
+    padding: 12px;
+    overflow: auto;
+    font-family: Helvetica, sans-serif;
+    font-size: 12px;
+    border: 1px solid $border-color;
+    border-top: none;
+    border-radius: 0 0 3px 3px;
+    background: #332e42;
+    outline: none;
+    color: #fff;
+    font-size: 14px;
+    @include scrollbar();
   }
 }
 </style>
