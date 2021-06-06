@@ -1,9 +1,9 @@
 <template>
   <div
     id="app"
-    v-on:mousemove="appMousemove($event)"
-    v-on:mousedown="appMousedown($event)"
-    v-on:mouseup="appMouseup($event)"
+    v-on:mousemove="handleAppMousemove($event)"
+    v-on:mousedown="handleAppMousedown($event)"
+    v-on:mouseup="handleAppMouseup($event)"
     :style="uiVariables()"
   >
     <!-- Taskbar -->
@@ -42,15 +42,15 @@
         :v-id="window.id"
         :style="windowUiVariables(idx)"
         :class="{
-          active: window.id === activeWindow.id,
+          active: activeItem && activeItem.id === window.id,
           maximized: window.maximized,
           minimized: minimizedWindows.find((mwId) => mwId === window.id),
           'user-interacting':
-            window.id === activeWindow.id && window.userInteracting
+            window.id === activeItem.id && window.userInteracting
         }"
-        v-on:mousedown="appWindowMouseDown(window.id)"
+        v-on:mousedown="handleWindowMouseDown(window.id)"
       >
-        <div class="controls">
+        <div class="window-controls">
           <span class="title">{{ window.title }}</span>
           <div class="buttons">
             <span
@@ -73,8 +73,34 @@
           v-on:mouseup="handleWindowContentMouseUp(window.id)"
           v-on:mousedown="handleWindowContentMouseDown(window.id)"
         >
-          <component :is="window.component" :window-id="window.id" />
+          <component :is="window.component" :window-id="window.id" :content="getFileContent(window.fileId)" />
         </div>
+      </div>
+    </div>
+
+    <!-- Desktop -->
+    <div class="desktop">
+      <div
+        v-for="(item, idx) in items"
+        v-bind:key="item.id"
+        ref="item"
+        class="desktop-item"
+        :class="{
+          app: item.type === 'app',
+          file: item.type === 'file',
+          active: activeItem && activeItem.id === item.id,
+        }"
+        :style="desktopItemUiVariables(idx)"
+        v-on:click="handleFileClick(item.id)"
+        v-on:dblclick="handleFileDoubleClick(item.id)"
+        v-on:mousedown="handleFileMouseDown(item.id)"
+      >
+        <div class="icon">
+          <i :class="getIcon(item)" />
+        </div>
+        <span class="name">
+          {{ getName(item) }}
+        </span>
       </div>
     </div>
   </div>
@@ -85,12 +111,62 @@ import Vue from 'vue/dist/vue.esm.js';
 
 const parse = JSON.parse;
 const stringify = JSON.stringify;
+
 const MOUSE_STATES = {
   UP: "up",
   DOWN: "down"
 };
-const fileTypes = {
-  vuedit: 'vuedit'
+
+const APP_FILE_TYPES = {
+  vuedit: 'vuedit',
+  story: 'story'
+}
+
+const APP_ITEM_TYPES = {
+  window: 'window',
+  file: 'file',
+  app: 'app'
+}
+
+/**
+ * @desc Matches & Closest polyfills
+ * @jonathantneal https://github.com/jonathantneal/closest/blob/master/src/index.js
+ */
+const ElementPrototype = window.Element.prototype;
+if (typeof ElementPrototype.matches !== 'function') {
+  /**
+   * @desc Add matches method to html element prototype
+   * @param selector -
+   */
+  ElementPrototype.matchs = ElementPrototype.msMatchesSelector ||  ElementPrototype.mozMatchesSelector || ElementPrototype.webkitMatchesSelector || 
+    function matches(selector) {
+      let idx = 0;
+      let element = this;
+      const elements = (element.document || element.ownerDocument).querySelectorAll(selector);
+
+      while (elements[idx] && elements[idx] !== element) {
+        idx++;
+      }
+      return Boolean(elements[idx]);
+    }
+}
+
+if (typeof ElementPrototype.closest !== 'function') {
+  /**
+   * @desc Add closest method to html element prototype
+   * @param selector -
+   */
+  ElementPrototype.closest = function closest(selector) {
+    let element = this;
+    
+    while (element && element.nodeType === Node.ELEMENT_NODE) {
+      if (element.matches(selector)) {
+        return element;
+      }
+      element = element.parentNode;
+    }
+    return null;
+  }
 }
 
 const helpers = {
@@ -119,9 +195,39 @@ const helpers = {
 };
 
 const system = {
+  /**
+   * @Vue - computed
+   */
+  computed: {
+    _helpers() {
+      return helpers.data().helpers
+    }
+  },
+
+  /**
+   * @Vue - Methods
+   */
   methods: {
     system(app) {
+      const context = this;
+
       return {
+        /**
+         * @desc
+         * @param data -
+         */
+        encode(data) {
+          return btoa(encodeURIComponent(stringify(data)));
+        },
+
+        /**
+         * @desc
+         * @param data -
+         */
+        decode(data) {
+          return parse(decodeURIComponent(atob(data)));
+        },
+
         /**
          * @desc
          * @param fileType -
@@ -129,11 +235,14 @@ const system = {
          * @param content -
          */
         saveFile(fileType, fileName, content) {
-          localStorage.setItem(`file-${app.windowId}`, btoa(encodeURIComponent(stringify({
+          const id = context._helpers.randid();
+
+          localStorage.setItem(`file-${app.windowId}`, this.encode({
+            id,
             fileType,
             fileName,
             content
-          }))));
+          }));
         },
 
         /**
@@ -150,52 +259,78 @@ const system = {
 
             if (record) {
               try {
-                file = parse(decodeURIComponent(atob(record)))
-              } catch(e) {
-                console.warn('File cannot load(!)')
-              }
+                file = this.decode(record)
+              } catch(e) { console.warn('File cannot load(!)') }
 
-              file && files.push(file);
-              f++;
+              file && files.push({ type: APP_ITEM_TYPES.file, ...file});
             }
-            else f = null;
+
+            f++;
+            if (!key) f = null;
           } while (f !== null)
 
           return files;
+        },
+
+        /**
+         * @desc 
+         */
+        getApps() {
+          const apps = Object.keys(Vue.options.components).filter(app => 
+            typeof Vue.options.components[app] === 'function'
+          );
+
+          return apps.map(app => ({
+            type: APP_ITEM_TYPES.app,
+            appConfig: {
+              appName: app,
+              ...Vue.options.components[app].options.config
+            }
+          }));
         }
       }
     }
   }
 }
 
+/* <b>Let's make a statement!</b>
+<br>
+<i>Bu bir italik metin.</i>
+<br>
+<u>Çok önemli bir uyarı.</u> */
+
 /**
  * @Component: Static Article
  * @from @souporserious https://codepen.io/souporserious/pen/xBpEj
  */
-const EditorComponent = Vue.component("EditorComponent", {
-  template: `
-    <div component="Editor">
-      <div class="editor-controls">
-        <a href="javascript:void(0);" data-role='bold' v-on:click="execute('bold')">B</a>
-        <a href="javascript:void(0);" data-role='italic' v-on:click="execute('italic')">I</a>
-        <a href="javascript:void(0);" data-role='underline' v-on:click="execute('underline')">U</a>
-        <a href="javascript:void(0);" data-role='justifyleft' v-on:click="execute('justifyleft')"><i class="menu-left"></i></a>
-        <a href="javascript:void(0);" data-role='justifycenter' v-on:click="execute('justifycenter')"><i class="menu-center"></i></a>
-        <a href="javascript:void(0);" data-role='justifyright' v-on:click="execute('justifyright')"><i class="menu-right"></i></a>
-        <a v-on:click="save" class="save">save</a>
-      </div>
-      <div ref="content" class="editor-content" contenteditable>
-        <b>Let's make a statement!</b>
-        <br>
-        <i>Bu bir italik metin.</i>
-        <br>
-        <u>Çok önemli bir uyarı.</u>
-      </div>
+const EditorComponentTemplate = `
+  <div component="Editor">
+    <div class="editor-controls">
+      <a href="javascript:void(0);" data-role='bold' v-on:click="execute('bold')">B</a>
+      <a href="javascript:void(0);" data-role='italic' v-on:click="execute('italic')">I</a>
+      <a href="javascript:void(0);" data-role='underline' v-on:click="execute('underline')">U</a>
+      <a href="javascript:void(0);" data-role='justifyleft' v-on:click="execute('justifyleft')"><i class="menu-left"></i></a>
+      <a href="javascript:void(0);" data-role='justifycenter' v-on:click="execute('justifycenter')"><i class="menu-center"></i></a>
+      <a href="javascript:void(0);" data-role='justifyright' v-on:click="execute('justifyright')"><i class="menu-right"></i></a>
+      <a v-on:click="save" class="save">save</a>
     </div>
-  `,
+    <div ref="content" class="editor-content" contenteditable v-html="content"></div>
+  </div>
+`;
+const EditorComponent = Vue.component("EditorComponent", {
+  template: EditorComponentTemplate,
   mixins: [helpers, system],
+  config: {
+    name: 'Vuedit',
+    icon: 'gg-format-text',
+    ext: APP_FILE_TYPES.vuedit
+  },
   props: {
     windowId: {
+      type: String,
+      default: null
+    },
+    content: {
       type: String,
       default: null
     }
@@ -209,10 +344,18 @@ const EditorComponent = Vue.component("EditorComponent", {
    * @Vue - methods
    */
   methods: {
+    /**
+     * @desc
+     */
     save() {
       const content = this.$refs.content.innerHTML;
-      this.system(this).saveFile(fileTypes.vuedit, 'test', content);
+      this.system(this).saveFile(APP_FILE_TYPES.vuedit, 'test', content);
     },
+
+    /**
+     * @desc
+     * @param command -
+     */
     execute(command) {
       document.execCommand(command, false);
     }
@@ -223,13 +366,20 @@ const EditorComponent = Vue.component("EditorComponent", {
  * @Component: Static Article
  * @from @ovens https://codepen.io/ovens/pen/EeprWN
  */
+const ArticleComponentTemplate =  `
+  <div>
+    <div v-bind:style="style.p" v-for="(v, idx) in [0,0,0,0,0,0]" v-html="sentence(idx)">
+    </div>
+  </div>
+`;
 const ArticleComponent = Vue.component("ArticleComponent", {
-  template: `
-    <div>
-      <div v-bind:style="style.p" v-for="(v, idx) in [0,0,0,0,0,0]" v-html="sentence(idx)">
-      </div>
-    </div>`,
+  template: ArticleComponentTemplate,
   mixins: [helpers],
+  config: {
+    name: 'Unreal Story',
+    icon: 'gg-file-document',
+    ext: APP_FILE_TYPES.story
+  },
   props: {
     text: {
       type: String,
@@ -238,11 +388,33 @@ const ArticleComponent = Vue.component("ArticleComponent", {
   },
   data() {
     return {
-      nouns: ["bird", "clock", "boy", "plastic", "duck", "teacher", "old lady", "professor", "hamster", "dog"],
-      verbs: ["kicked", "ran", "flew", "dodged", "sliced", "rolled", "died", "breathed", "slept", "killed"],
-      adjectives: ["beautiful", "lazy", "professional", "lovely", "dumb", "rough", "soft", "hot", "vibrating", "slimy"],
-      adverbs: ["slowly", "elegantly", "precisely", "quickly", "sadly", "humbly", "proudly", "shockingly", "calmly", "passionately"],
-      preposition: ["down", "into", "up", "on", "upon", "below", "above", "through", "across", "towards"],
+      n: [
+        "bird", "clock", "boy",
+        "plastic", "duck", "teacher",
+        "old lady", "professor", "hamster", "dog"
+      ],
+      v: [
+        "kicked", "ran", "flew",
+        "dodged", "sliced", "rolled",
+        "died", "breathed", "slept",
+        "killed"
+      ],
+      a: [
+        "beautiful", "lazy", "professional",
+        "lovely", "dumb", "rough",
+        "soft", "hot", "vibrating",
+        "slimy"
+      ],
+      b: [
+        "slowly", "elegantly", "precisely",
+        "quickly", "sadly", "humbly",
+        "proudly", "shockingly", "calmly",
+        "passionately"],
+      p: [
+        "down", "into", "up", "on", "upon",
+        "below", "above", "through", "across",
+        "towards"
+      ],
       content: '',
       style: {
         p: {
@@ -259,29 +431,42 @@ const ArticleComponent = Vue.component("ArticleComponent", {
    * @Vue - methods
    */
   methods: {
+    /**
+     * @desc 
+     * @param max -
+     */
     rand(max) {
       return Math.floor(Math.random() * (max)) + 1;
     },
+
+    /**
+     * @desc
+     * @param total -
+     * @param randMax -
+     */
+    fillRand(total, randMax) {
+      return [...Array(total)].map( _ => this.rand(randMax));
+    },
+
+    /**
+     * @desc
+     * @param idx -
+     */
     sentence(idx) {
       let text = '';
       const totalWord = this.rand(5);
 
       for (let s = 0; s <= totalWord; s++) {
-        const rand1 = this.rand(10);
-        const rand2 = this.rand(10);
-        const rand3 = this.rand(10);
-        const rand4 = this.rand(10);
-        const rand5 = this.rand(10);
-        const rand6 = this.rand(10);
+        const [r1, r2, r3, r4, r5, r6] = this.fillRand(6, 10);
 
         text += (idx === 0 ? 'The ' : '') + 
-          this.adjectives[rand1] + " " + this.nouns[rand2] + " " + 
-          this.adverbs[rand3] + " " + this.verbs[rand4] + " because some " + 
-          this.nouns[rand1] + " " + this.adverbs[rand1] + " " + 
-          this.verbs[rand1] + " " + this.preposition[rand1] + " a " + 
-          this.adjectives[rand2] + " " + this.nouns[rand5] + " which, became a " + 
-          this.adjectives[rand3] + ", " + this.adjectives[rand4] + " " + 
-          this.nouns[rand6] + "."
+          this.a[r1] + " " + this.n[r2] + " " + 
+          this.b[r3] + " " + this.v[r4] + " because some " + 
+          this.n[r1] + " " + this.b[r1] + " " + 
+          this.v[r1] + " " + this.p[r1] + " a " + 
+          this.a[r2] + " " + this.n[r5] + " which, became a " + 
+          this.a[r3] + ", " + this.a[r4] + " " + 
+          this.n[r6] + "."
       }
 
       return text;
@@ -296,40 +481,53 @@ export default {
   mixins: [helpers, system],
 
   /**
-   * @Vue - Components
-   * -
-   */
-  compponents: {
-    ArticleComponent
-  },
-
-  /**
    * @Vue - Data
    * -
    */
   data() {
+    const uiDefaultTaskbar = {
+      verticalGap: 20,
+      horizontalGap: 20,
+      height: 60
+    };
+
+    const uiDefaultWindow = {
+      minimizedAnimDuration: "0.35s",
+      minimizedWidth: 250,
+      minimizedHeight: 45,
+      minimizedGap: 20
+    };
+
+    const uiDefaultFile = {
+      width: 100,
+      height: 100
+    }
+
+    const taskbarBounds = {
+      x: null,
+      y: null,
+      w: null,
+      h: null 
+    };
+
     return {
       windows: [],
+      files: [],
+      apps: [],
+      folders: [],
+      items: [],
       minimizedWindows: [],
       windowFocusSequence: [],
-      activeWindow: null,
+      activeItem: null,
       mouseState: MOUSE_STATES.UP,
       ui: {
         default: {
-          taskbar: {
-            verticalGap: 20,
-            horizontalGap: 20,
-            height: 60
-          },
-          window: {
-            minimizedAnimDuration: "0.35s",
-            minimizedWidth: 250,
-            minimizedHeight: 45,
-            minimizedGap: 20
-          }
+          taskbar: uiDefaultTaskbar,
+          window: uiDefaultWindow,
+          file: uiDefaultFile
         },
         taskbar: {
-          bounds: { x: null, y: null, w: null, h: null }
+          bounds: taskbarBounds
         }
       }
     };
@@ -349,9 +547,9 @@ export default {
     /**
      * @Watch
      * @desc update window focues sequence every
-     * activeWindow change
+     * activeItem change
      */
-    activeWindow(newValue, oldValue) {
+    activeItem(newValue, oldValue) {
       newValue && this.updateWindowFocusSequence(newValue.id);
     }
   },
@@ -360,8 +558,29 @@ export default {
    * @Vue - beforeCreate
    */
   created() {
-    const files = this.system(this).getFiles();
-    console.log(files);
+
+    // Get apps
+    // #
+    this.apps = this.system(this).getApps();
+    
+    // Get files from hdd :)
+    // #
+    this.files = this.system(this).getFiles();
+
+    this.items = [
+      ...this.apps,
+      ...this.files
+    ];
+
+    this.items.forEach(item => {
+      item.cssVariables = {};
+      item.drag = { x: 0, y: 0 };
+      item.offset = { top: 0, left: 0 };
+      
+      !item.id && (item.id = this.helpers.randid());
+    });
+
+    console.log(this.items)
   },
 
   /**
@@ -371,12 +590,13 @@ export default {
   mounted() {
     this.globalEvents();
 
-    this.createWindow("Another Story", ArticleComponent, 100, 100);
-    this.createWindow("Another Story", ArticleComponent, 120, 120);
-    this.createWindow("Editor", EditorComponent, 140, 140);
+    /* this.createWindow("Another Story", ArticleComponent, 100, 100);
+    this.createWindow("Another Story", ArticleComponent, 120, 120); */
+    this.createWindow("Editor", EditorComponent, 150, 150);
 
     this.$nextTick(() => {
       this.setUiParameters();
+      this.organizeItems();
     });
   },
 
@@ -400,69 +620,77 @@ export default {
     },
 
     /**
-     * @Event
+     * @Event Resize
      * @desc Window Resize
      */
     handleBrowserWindowResize() {
       this.$nextTick(() => {
         this.setUiParameters();
+        this.organizeItems();
         this.organizeMinimizedWindows();
       });
     },
 
     /**
-     * @Event
+     * @Event MouseMove
      * @desc
      */
-    appMousemove: function (e) {
+    handleAppMousemove: function (e) {
       if (
-        this.activeWindow &&
-        this.mouseState == MOUSE_STATES.DOWN &&
-        !this.isWindowMinimized(this.activeWindow.id) &&
-        !this.isWindowMaximized(this.activeWindow.id)
+        this.activeItem &&
+        this.mouseState == MOUSE_STATES.DOWN && (
+        (this.activeItem.type === APP_ITEM_TYPES.window && 
+        !this.isWindowMinimized(this.activeItem.id) &&
+        !this.isWindowMaximized(this.activeItem.id)) ||
+        (this.activeItem.type === APP_ITEM_TYPES.file ||
+        this.activeItem.type === APP_ITEM_TYPES.app))
       ) {
-        this.activeWindow.offset.top = e.pageY - this.activeWindow.drag.y;
-        this.activeWindow.offset.left = e.pageX - this.activeWindow.drag.x;
+        this.activeItem.offset.top = e.pageY - this.activeItem.drag.y;
+        this.activeItem.offset.left = e.pageX - this.activeItem.drag.x;
+        this.$forceUpdate();
       }
     },
 
     /**
-     * @Event
+     * @Event MouseDown
      * @desc
      */
-    appMousedown(e) {
-      if (e.target && e.target.classList.contains("controls")) {
+    handleAppMousedown(e) {
+      if (e.target && (
+        e.target.classList.contains("window-controls") ||
+        e.target.closest('.desktop-item'))
+      ) {
         this.mouseState = MOUSE_STATES.DOWN;
-        this.activeWindow.drag.x = e.pageX - this.activeWindow.offset.left;
-        this.activeWindow.drag.y = e.pageY - this.activeWindow.offset.top;
+        this.activeItem.drag.x = e.pageX - this.activeItem.offset.left;
+        this.activeItem.drag.y = e.pageY - this.activeItem.offset.top;
       }
     },
 
     /**
-     * @Event
+     * @Event MouseUp
      * @desc
      */
-    appMouseup() {
-      if (!this.activeWindow) return;
+    handleAppMouseup() {
+      if (!this.activeItem) return;
 
       this.mouseState = MOUSE_STATES.UP;
-      this.activeWindow.offset.top < -20 && (this.activeWindow.offset.top = 0);
-      this.activeWindow.userInteracting = false;
+      this.activeItem.offset.top < -20 && (this.activeItem.offset.top = 0);
+      this.activeItem.userInteracting = false;
     },
 
     /**
-     * @Event
+     * @Event MouseDown
      * @desc
      */
-    appWindowMouseDown(id) {
+    handleWindowMouseDown(id) {
       const window = this.windows.find((w) => w.id === id);
-      this.activeWindow = window;
-      this.activeWindow.userInteracting = true;
+      this.activeItem = window;
+      this.activeItem.userInteracting = true;
     },
 
     /**
+     * @Event MouseDown
      * @desc
-     * @param id -
      */
     handleWindowContentMouseDown(id) {
       const window = this.windows.find((w) => w.id === id);
@@ -470,8 +698,8 @@ export default {
     },
 
     /**
+     * @Event MouseUp
      * @desc
-     * @param id -
      */
     handleWindowContentMouseUp(id) {
       const window = this.windows.find((w) => w.id === id);
@@ -479,15 +707,7 @@ export default {
     },
 
     /**
-     * @Event
-     * @desc
-     */
-    handleVueClick() {
-      this.createWindow(this.helpers.randid(), ArticleComponent, 120, 120);
-    },
-
-    /**
-     * @Event
+     * @Event Resize
      * @desc
      */
     handleWindowResize(record, window, contentDomRef) {
@@ -500,7 +720,7 @@ export default {
     },
 
     /**
-     * @Event
+     * @Event Init
      * @desc
      */
     handleWindowContentInit(id) {
@@ -537,24 +757,103 @@ export default {
     },
 
     /**
+     * @Event MouseDown
+     * @desc
+     */
+    handleFileMouseDown(id) {
+      const item = this.items.find((i) => i.id === id);
+      this.activeItem = item;
+    },
+
+    /**
+     * @Event Click
+     * @desc
+     */
+    handleFileClick(id) {
+    },
+
+    /**
+     * @Event Double Click
+     * @desc
+     */
+    handleFileDoubleClick(id) {
+      const item = this.items.find((i) => i.id === id);
+      
+      if (item.type === APP_ITEM_TYPES.app) {
+        this.openApp(item);
+      }
+      else if (item.type === APP_ITEM_TYPES.file) {
+        this.openFile(item);
+      }
+    },
+
+    /**
+     * @Event Click
+     * @desc
+     */
+    handleVueClick() {
+      this.createWindow(this.helpers.randid(), ArticleComponent, 120, 120);
+    },
+
+    /**
+     * @desc
+     * @param file -
+     */
+    openFile(file) {
+      const app = this.apps.find(app => app.appConfig.ext === file.fileType);
+      const fileOpened = this.windows.find(w => w.id === file.id); 
+
+      if (app && !fileOpened) {
+        this.openApp(app, file);
+      }
+
+      if (fileOpened) {
+        // focus window
+      }
+    },
+
+    /**
+     * @desc
+     * @param app -
+     * @param file -
+     */
+    openApp(app, file) {
+      const { name, appName } = app.appConfig;
+      const component = Vue.options.components[appName];
+      const title = name + (file && (' - ' + file.fileName) || '');
+      
+      if (component) {
+        this.createWindow(
+          title,
+          component,
+          170,
+          170,
+          file && file.id || null
+        );
+      }
+    },
+
+    /**
      * @desc Creates new window
      */
-    createWindow(title, component, x, y) {
+    createWindow(title, component, x, y, id) {
       const window = {
+        id: id || this.helpers.randid(),
+        type: APP_ITEM_TYPES.window,
         title,
-        id: this.helpers.randid(),
+        component,
+        fileId: id,
         minimized: false,
         userInteracting: false,
-        component: component,
         drag: { x: 0, y: 0 },
         offset: { top: y, left: x },
-        cssVariables: {}
+        cssVariables: {},
       };
 
       const idx = this.windows.push(window) - 1;
 
       this.windows[idx].idx = idx;
-      this.activeWindow = this.windows[idx];
+      this.activeItem = this.windows[idx];
       this.updateWindowFocusSequence(window.id);
     },
 
@@ -641,12 +940,11 @@ export default {
     },
 
     /**
-     * @desc Generates xy transform value for window
-     * position
+     * @desc Generates styles for window
+     * @param idx -
      */
     windowUiVariables(idx) {
       const window = this.windows[idx];
-      let extra = {};
       let posx = window.offset.left;
       let posy = window.offset.top;
 
@@ -654,7 +952,22 @@ export default {
         transform: `translate(${posx}px, ${posy}px)`,
         zIndex: this.windowFocusSequence.findIndex((wId) => wId === window.id),
         ...this.cssVarsGenerator(window.cssVariables, "list"),
-        ...this.cssVarsGenerator(extra, "list")
+      };
+    },
+
+    /**
+     * @desc Generates style for desktop items
+     * @param idx -
+     */
+    desktopItemUiVariables(idx, id) {
+      const item = this.items[idx];
+      let posx = item.offset.left;
+      let posy = item.offset.top;
+
+      return {
+        transform: `translate(${posx}px, ${posy}px)`,
+        zIndex: this.activeItem && this.activeItem.id === item.id ? 1 : 0,
+        ...this.cssVarsGenerator(item.cssVariables, "list"),
       };
     },
 
@@ -742,12 +1055,105 @@ export default {
         };
       });
     },
+    
+    /**
+     * @desc
+     */
+    organizeItems() {
+      const grid = this.getDesktopGrid();
+
+      this.items.map((item, idx) => {
+        const column = this.items.length > grid.totalItemsInColumn
+          ? parseInt((idx / (grid.totalItemsInColumn % this.items.length))) 
+          : 0
+        ;
+        const startTop = grid.top + 20;
+        const top = ((idx % (grid.totalItemsInColumn)) * this.ui.default.file.height) + startTop;
+        const left = (column * this.ui.default.file.width) + 20;
+        
+        item.offset = { 
+          top,
+          left
+        };
+
+        return item;
+      });
+    },
+
+    /**
+     * @desc
+     */
+    getDesktopGrid() {
+      const { h: taskbarBoundsH } = this.ui.taskbar.bounds;
+      const [wW, wH] = [window.innerWidth, window.innerHeight];
+      const top = (this.ui.default.taskbar.verticalGap * 2) + taskbarBoundsH
+      const totalItemsInRow = parseInt(wW / this.ui.default.file.width);
+      const totalItemsInColumn = parseInt((wH - top) / this.ui.default.file.height);
+
+      return { top, totalItemsInRow, totalItemsInColumn }
+    },
+
+    /**
+     * @desc
+     * @param item -
+     */
+    getExt(item) {
+      if (item.type === APP_ITEM_TYPES.file) {
+        return '.' + item.fileType;
+      }
+
+      return '';
+    },
+
+    /**
+     * @desc
+     * @param item -
+     */
+    getName(item) {
+      let name = item.type === APP_ITEM_TYPES.app
+        ? item.appConfig.name
+        : item.fileName + this.getExt(item)
+      ;
+
+      return name;
+    },
+    
+    /**
+     * @desc
+     * @param item -
+     */
+    getIcon(item) {
+      let icon = item.type === APP_ITEM_TYPES.app && item.appConfig.icon || '';
+
+      if (item.type === APP_ITEM_TYPES.file) {
+        const app = this.apps.find(app => 
+          app.appConfig.ext === item.fileType
+        );
+
+        icon = app && app.appConfig.icon || '';
+      }
+
+      return icon;
+    },
+
+    /**
+     * @desc
+     * @fileId -
+     */
+    getFileContent(fileId) {
+      if (fileId) return undefined;
+      const file = this.files.find(file => file.id === fileId);
+      console.log('asd',fileId)
+      if (file && file.content) {
+        return file.content;
+      }
+    },
 
     /**
      * @desc
      */
     setActiveWindow(idx) {
-      this.activeWindow = this.windows[idx];
+      this.activeItem = this.windows[idx];
     },
 
     /**
@@ -780,7 +1186,7 @@ export default {
      */
     toggleWindowMaximize(id) {
       const idx = this.windows.findIndex((w) => w.id === id);
-      const isMinimized = this.isWindowMinimized(this.activeWindow.id);
+      const isMinimized = this.isWindowMinimized(this.activeItem.id);
 
       if (isMinimized) {
         this.handleWindowMinimize(id);
@@ -831,13 +1237,13 @@ export default {
       }
 
       if (!this.windows.length) {
-        this.activeWindow = null;
+        this.activeItem = null;
         return;
       }
 
       // Make last focused window active
       // #
-      if (!!this.windows.length && this.activeWindow.id === id) {
+      if (!!this.windows.length && this.activeItem.id === id) {
         const lastFocusedWindow = this.windowFocusSequence.slice(-1).pop();
         const availableWindows = this.windows.filter(
           (w) => !this.isWindowMinimized(w.id)
@@ -853,7 +1259,7 @@ export default {
         }
 
         // Otherwise set last focused
-        // window in not minimized windows
+        // window from not minimized ones
         const targetWindow = this.windowFocusSequence
           .filter((wId) => availableWindows.find((aW) => aW.id === wId))
           .slice(-1)
@@ -869,8 +1275,8 @@ export default {
 </script>
 
 <style lang="scss">
-@import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,900;1,500&display=swap");
-
+@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,900;1,500&display=swap');
+@import url('https://unpkg.com/css.gg/icons/all.css');
 /**
     * Sass Constants
     */
@@ -965,7 +1371,7 @@ body {
     * Window Component: Controls 
     * ------ --------- --------
     */
-.window .controls {
+.window .window-controls {
   position: relative;
   display: flex;
   align-items: center;
@@ -1089,6 +1495,7 @@ body {
   height: calc(var(--taskbar-height) * 1px);
   display: flex;
   justify-content: flex-end;
+  z-index: $z - 1;
 }
 
 /* ------ --------- ----------
@@ -1169,6 +1576,117 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
   }
 }
 
+/* ------ --------- ----------
+    * Desktop Component
+    * ------ --------- --------
+    */
+.desktop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: $z - 2;
+}
+
+.desktop-item {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  user-select: none;
+  cursor: pointer;
+  width: 90px;
+  height: 90px;
+  &:hover {
+    &:before {
+      opacity: 1;
+    }
+  }
+}
+
+/* ------ --------- ----------
+    * Desktop Component: Desktop Item
+    * ------ --------- --------
+    */
+.desktop-item:before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  opacity: 0;
+  transform: translate(-50%, -55%);
+  background-color: rgba(255, 255, 255, 0.12);
+  transition: all 0.3s var(--vueos-transition-fn);
+  border-radius: 10px;
+  backdrop-filter: blur(10px);
+  z-index: -1;
+}
+
+.desktop-item .icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1em;
+  text-transform: capitalize;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #fff;
+  border-radius: 8px;
+  min-width: 50px;
+  min-height: 50px;
+  box-sizing: border-box;
+  color: #3aa776;
+  box-shadow: var(--primary-shadow);
+  backdrop-filter: blur(10px);
+}
+
+.desktop-item .name {
+  font-weight: 300;
+  color: #fff;
+  margin-top: 8px;
+  width: 100%;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.desktop-item.app {
+  .icon {
+    background-color: #311b50;
+    color: #fff;
+    &:before {
+      content: 'app';
+      display: block;
+      position: absolute;
+      bottom: 2px;
+      left: 100%;
+      background-color: #41b883;
+      padding: 2px 3px;
+      border-radius: 6px;
+      margin-left: -12px;
+    }
+  }
+}
+
+.desktop-item.active {
+  .name {
+    overflow: visible;
+    word-break: break-all;
+    white-space: normal;
+  }
+}
+
+/* ------ --------- ----------
+    * Component: Editor
+    * ------ --------- --------
+    */
 [component="Editor"] {
   $controls-color: #ADB5B9;
   $border-color: rgba(255, 255, 255, 0.1);
@@ -1181,7 +1699,7 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
     height: 35px;
     border: 1px solid $border-color;
     border-bottom: none;
-    border-radius: 3px 3px 0 0;
+    border-radius: calc(var(--window-radius) / 2) calc(var(--window-radius) / 2) 0 0;
     background: #292535;
     white-space: nowrap;
     overflow: hidden;
@@ -1257,7 +1775,7 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
     font-size: 12px;
     border: 1px solid $border-color;
     border-top: none;
-    border-radius: 0 0 3px 3px;
+    border-radius: 0 0 var(--window-radius) var(--window-radius);
     background: #332e42;
     outline: none;
     color: #fff;
