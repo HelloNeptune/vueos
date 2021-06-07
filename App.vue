@@ -1,9 +1,9 @@
 <template>
   <div
     id="app"
-    v-on:mousemove="handleAppMousemove($event)"
-    v-on:mousedown="handleAppMousedown($event)"
-    v-on:mouseup="handleAppMouseup($event)"
+    v-on:mousemove="handleMouseMove($event)"
+    v-on:mousedown="handleMouseDown($event)"
+    v-on:mouseup="handleMouseUp($event)"
     :style="uiVariables()"
   >
     <!-- Taskbar -->
@@ -73,7 +73,12 @@
           v-on:mouseup="handleWindowContentMouseUp(window.id)"
           v-on:mousedown="handleWindowContentMouseDown(window.id)"
         >
-          <component :is="window.component" :window-id="window.id" :content="getFileContent(window.fileId)" />
+          <component
+            :is="window.component"
+            :window-id="window.id"
+            :file="getFile(window.fileId)"
+            v-on:on-save="handleAppOnSave"
+          />
         </div>
       </div>
     </div>
@@ -88,6 +93,7 @@
         :class="{
           app: item.type === 'app',
           file: item.type === 'file',
+          new: item.new,
           active: activeItem && activeItem.id === item.id,
         }"
         :style="desktopItemUiVariables(idx)"
@@ -95,12 +101,14 @@
         v-on:dblclick="handleFileDoubleClick(item.id)"
         v-on:mousedown="handleFileMouseDown(item.id)"
       >
-        <div class="icon">
-          <i :class="getIcon(item)" />
+        <div class="wrapper">
+          <div class="icon">
+            <i :class="getIcon(item)" />
+          </div>
+          <span class="name">
+            {{ getName(item) }}
+          </span>
         </div>
-        <span class="name">
-          {{ getName(item) }}
-        </span>
       </div>
     </div>
   </div>
@@ -108,6 +116,10 @@
 
 <script>
 import Vue from 'vue/dist/vue.esm.js';
+
+// Dump vuedit file
+// #
+const aNote = 'JTdCJTIyaWQlMjIlM0ElMjJlZTJmMTllZDIyNDYlMjIlMkMlMjJmaWxlVHlwZSUyMiUzQSUyMnZ1ZWRpdCUyMiUyQyUyMmZpbGVOYW1lJTIyJTNBJTIyYSUyMG5vdGUlMjIlMkMlMjJjb250ZW50JTIyJTNBJTIyJTNDYiUzRUxldCdzJTIwbWFrZSUyMGElMjBzdGF0ZW1lbnQhJTNDJTJGYiUzRSUzQ2RpdiUzRSUzQ2klM0VCdSUyMGJpciUyMGl0YWxpayUyMG1ldGluLiUzQyUyRmklM0UlM0NiciUzRSUzQyUyRmRpdiUzRSUzQ2RpdiUzRSUzQ3UlM0UlQzMlQjZuZW1saSUyMGJpciUyMHV5YXIlQzQlQjEuJTNDJTJGdSUzRSUzQ2JyJTNFJTNDJTJGZGl2JTNFJTIyJTdE';
 
 const parse = JSON.parse;
 const stringify = JSON.stringify;
@@ -170,6 +182,10 @@ if (typeof ElementPrototype.closest !== 'function') {
 }
 
 const helpers = {
+
+  /**
+   * @Vue - data
+   */
   data() {
     return {
       helpers: {
@@ -195,6 +211,7 @@ const helpers = {
 };
 
 const system = {
+
   /**
    * @Vue - computed
    */
@@ -235,8 +252,8 @@ const system = {
          * @param content -
          */
         saveFile(fileType, fileName, content) {
-          const id = context._helpers.randid();
-
+          const id = app.windowId || context._helpers.randid();
+          
           localStorage.setItem(`file-${app.windowId}`, this.encode({
             id,
             fileType,
@@ -269,6 +286,13 @@ const system = {
             if (!key) f = null;
           } while (f !== null)
 
+          if (files.length === 0) {
+            files.push({
+              type: APP_ITEM_TYPES.file,
+              ...this.decode(aNote)
+            })
+          }
+
           return files;
         },
 
@@ -276,9 +300,10 @@ const system = {
          * @desc 
          */
         getApps() {
-          const apps = Object.keys(Vue.options.components).filter(app => 
-            typeof Vue.options.components[app] === 'function'
-          );
+          const apps = Object.keys(Vue.options.components).filter(app => {
+            const component = Vue.options.components[app];
+            return typeof component === 'function' && component.options.config;
+          });
 
           return apps.map(app => ({
             type: APP_ITEM_TYPES.app,
@@ -297,7 +322,115 @@ const system = {
 <br>
 <i>Bu bir italik metin.</i>
 <br>
-<u>Çok önemli bir uyarı.</u> */
+<u>Çok </u> */
+
+const SaveComponentTemplate = `
+  <div component="Save" :class="{shown: shown}">
+    <div class="form">
+      <div class="form-element">
+        <span class="label">Filename</span>
+        <input v-model="fileName" placeholder="give a name to this" type="text"></input>
+      </div>
+    </div>
+    <button class="button" v-on:click="handleSaveClick">
+      Save    
+      <i class="gg-loadbar"></i>
+    </button>
+  </div>
+`;
+const SaveComponent = Vue.component('SaveComponent', {
+
+  /**
+   * @Vue -template
+   */
+  template: SaveComponentTemplate,
+
+  /**
+   * @Vue - mixins
+   */
+  mixins: [helpers],
+
+  /**
+   * @Vue - data
+   */
+  data() {
+    return {
+      shown: false,
+      fileName: null,
+      resolve: null,
+      reject: null
+    }
+  },
+
+  /**
+   * @Vue - methods
+   */
+  methods: {
+
+    /**
+     * @Event
+     * @desc
+     */
+    handleSaveClick() {
+      if (this.fileName && this.resolve) {
+        this.resolve(this.fileName);
+        this.setState(false);
+      }
+    },
+
+    /**
+     * @desc
+     */
+    run(file) {
+      if (file) {
+        this.fileName = file.fileName;
+      }
+
+      return new Promise((resolve, reject) => {
+        this.setState(true, resolve, reject);
+      });
+    },
+    
+    /**
+     * @desc
+     * @param status -
+     * @param resolve -
+     * @param reject -
+     */
+    setState(status, resolve, reject) {
+      if (status) {
+        this.resolve = resolve;
+        this.reject = reject;
+      }
+      else {
+        this.resolve = null;
+        this.reject = null;
+      }
+
+      this.disableContent(status);
+      this.shown = status;
+    },
+
+    /**
+     * @desc
+     * @param disable -
+     */
+    disableContent(disable) {
+      const appContent = this.$parent.$refs['app-content'];
+
+      if (this.$parent && appContent) {
+        if (disable) {
+          appContent.style.filter = 'blur(3px)';
+          appContent.style.opacity = '0.5';
+        }
+        else {
+          appContent.style.filter = null;
+          appContent.style.opacity = null;
+        }
+      }
+    }
+  }
+});
 
 /**
  * @Component: Static Article
@@ -305,51 +438,113 @@ const system = {
  */
 const EditorComponentTemplate = `
   <div component="Editor">
-    <div class="editor-controls">
-      <a href="javascript:void(0);" data-role='bold' v-on:click="execute('bold')">B</a>
-      <a href="javascript:void(0);" data-role='italic' v-on:click="execute('italic')">I</a>
-      <a href="javascript:void(0);" data-role='underline' v-on:click="execute('underline')">U</a>
-      <a href="javascript:void(0);" data-role='justifyleft' v-on:click="execute('justifyleft')"><i class="menu-left"></i></a>
-      <a href="javascript:void(0);" data-role='justifycenter' v-on:click="execute('justifycenter')"><i class="menu-center"></i></a>
-      <a href="javascript:void(0);" data-role='justifyright' v-on:click="execute('justifyright')"><i class="menu-right"></i></a>
-      <a v-on:click="save" class="save">save</a>
+    <Save ref="saveModal" />
+    <div ref="app-content" class="app-content">
+      <div class="editor-controls">
+        <a href="javascript:void(0);" data-role='bold' v-on:click="execute('bold')">B</a>
+        <a href="javascript:void(0);" data-role='italic' v-on:click="execute('italic')">I</a>
+        <a href="javascript:void(0);" data-role='underline' v-on:click="execute('underline')">U</a>
+        <a href="javascript:void(0);" data-role='justifyleft' v-on:click="execute('justifyleft')"><i class="menu-left"></i></a>
+        <a href="javascript:void(0);" data-role='justifycenter' v-on:click="execute('justifycenter')"><i class="menu-center"></i></a>
+        <a href="javascript:void(0);" data-role='justifyright' v-on:click="execute('justifyright')"><i class="menu-right"></i></a>
+        <a v-on:click="handleSaveClick" class="save">
+          Save
+          <i class="gg-software-download" />
+        </a>
+      </div>
+      <div ref="content" class="editor-content" contenteditable v-html="content"></div>
     </div>
-    <div ref="content" class="editor-content" contenteditable v-html="content"></div>
   </div>
 `;
 const EditorComponent = Vue.component("EditorComponent", {
-  template: EditorComponentTemplate,
-  mixins: [helpers, system],
+  /**
+   * @Vueos - config
+   */
   config: {
     name: 'Vuedit',
     icon: 'gg-format-text',
     ext: APP_FILE_TYPES.vuedit
   },
+
+  components: { Save: SaveComponent },
+
+  /**
+   * @Vue - template
+   */
+  template: EditorComponentTemplate,
+
+  /**
+   * @Vue - mixins
+   */
+  mixins: [helpers, system],
+
+  /**
+   * @Vue - props
+   */
   props: {
     windowId: {
       type: String,
       default: null
     },
-    content: {
-      type: String,
+    file: {
+      type: Object,
       default: null
+    },
+  },
+
+  /**
+   * @Vue - created
+   */
+  created() {
+    if (this.file) {
+      this.content = this.file.content;
     }
   },
+
+  /**
+   * @Vue - data
+   */
   data() {
     return {
-      style: {}
+      content: '',
     };
   },
+
   /**
    * @Vue - methods
    */
   methods: {
+
     /**
+     * @Event
      * @desc
      */
-    save() {
+    handleSaveClick() {
+      this.save();
+    },
+
+    /**
+     * @desc
+     * @param filename -
+     */
+    saveToDisk(fileName) {
       const content = this.$refs.content.innerHTML;
-      this.system(this).saveFile(APP_FILE_TYPES.vuedit, 'test', content);
+      this.system(this).saveFile(APP_FILE_TYPES.vuedit, fileName, content);
+      this.$emit('on-save', this.windowId);
+    },
+
+    /**
+     * @desc
+     * 
+     */
+    save() {
+
+      if (!this.file) {
+        this.$refs.saveModal.run().then(
+          fileName => this.saveToDisk(fileName)
+        );
+      }
+      else this.saveToDisk(this.file.fileName);
     },
 
     /**
@@ -373,19 +568,33 @@ const ArticleComponentTemplate =  `
   </div>
 `;
 const ArticleComponent = Vue.component("ArticleComponent", {
-  template: ArticleComponentTemplate,
-  mixins: [helpers],
+  /**
+   * @Vueos - config
+   */
   config: {
     name: 'Unreal Story',
     icon: 'gg-file-document',
     ext: APP_FILE_TYPES.story
   },
-  props: {
-    text: {
-      type: String,
-      default: null
-    }
-  },
+
+  /**
+   * @Vue - template
+   */
+  template: ArticleComponentTemplate,
+
+  /**
+   * @Vue - mixins
+   */
+  mixins: [helpers],
+  
+  /**
+   * @Vue - props
+   */
+  props: {},
+
+  /**
+   * @Vue - data
+   */
   data() {
     return {
       n: [
@@ -427,6 +636,7 @@ const ArticleComponent = Vue.component("ArticleComponent", {
       }
     };
   },
+
   /**
    * @Vue - methods
    */
@@ -475,6 +685,7 @@ const ArticleComponent = Vue.component("ArticleComponent", {
 });
 
 export default {
+
   /**
    * @Vue - Mixins
    */
@@ -521,6 +732,11 @@ export default {
       activeItem: null,
       mouseState: MOUSE_STATES.UP,
       ui: {
+        itemDefaults: {
+          cssVariables: {},
+          drag: { x: 0, y: 0 },
+          offset: { top: 0, left: 0 }
+        },
         default: {
           taskbar: uiDefaultTaskbar,
           window: uiDefaultWindow,
@@ -550,7 +766,10 @@ export default {
      * activeItem change
      */
     activeItem(newValue, oldValue) {
-      newValue && this.updateWindowFocusSequence(newValue.id);
+      newValue &&
+      newValue.type &&
+      newValue.type === APP_ITEM_TYPES.window &&
+      this.updateWindowFocusSequence(newValue.id);
     }
   },
 
@@ -559,7 +778,7 @@ export default {
    */
   created() {
 
-    // Get apps
+    // Get vueos apps
     // #
     this.apps = this.system(this).getApps();
     
@@ -573,14 +792,12 @@ export default {
     ];
 
     this.items.forEach(item => {
-      item.cssVariables = {};
-      item.drag = { x: 0, y: 0 };
-      item.offset = { top: 0, left: 0 };
-      
+      Object.keys(this.ui.itemDefaults).forEach(d => {
+        item[d] = this.ui.itemDefaults[d]
+      })
+
       !item.id && (item.id = this.helpers.randid());
     });
-
-    console.log(this.items)
   },
 
   /**
@@ -590,9 +807,7 @@ export default {
   mounted() {
     this.globalEvents();
 
-    /* this.createWindow("Another Story", ArticleComponent, 100, 100);
-    this.createWindow("Another Story", ArticleComponent, 120, 120); */
-    this.createWindow("Editor", EditorComponent, 150, 150);
+    this.createWindow("Unreal Story", ArticleComponent, 150, 150);
 
     this.$nextTick(() => {
       this.setUiParameters();
@@ -635,7 +850,7 @@ export default {
      * @Event MouseMove
      * @desc
      */
-    handleAppMousemove: function (e) {
+    handleMouseMove: function (e) {
       if (
         this.activeItem &&
         this.mouseState == MOUSE_STATES.DOWN && (
@@ -655,7 +870,7 @@ export default {
      * @Event MouseDown
      * @desc
      */
-    handleAppMousedown(e) {
+    handleMouseDown(e) {
       if (e.target && (
         e.target.classList.contains("window-controls") ||
         e.target.closest('.desktop-item'))
@@ -670,7 +885,7 @@ export default {
      * @Event MouseUp
      * @desc
      */
-    handleAppMouseup() {
+    handleMouseUp() {
       if (!this.activeItem) return;
 
       this.mouseState = MOUSE_STATES.UP;
@@ -792,7 +1007,36 @@ export default {
      * @desc
      */
     handleVueClick() {
-      this.createWindow(this.helpers.randid(), ArticleComponent, 120, 120);
+    },
+
+    /**
+     * @Event On Save
+     * @desc
+     */
+    handleAppOnSave(fileId) {
+      const wIdx = this.windows.findIndex(w => w.id === fileId);
+      const item = this.items.find(i => i.id === fileId);
+      const file = this.system(this).decode(
+        localStorage.getItem(`file-${fileId}`)
+      );
+
+
+      if (item) {
+        item.content = file.content;
+      }
+      else {
+        Object.keys(this.ui.itemDefaults).forEach(d => {
+          file[d] = this.ui.itemDefaults[d]
+        })
+
+        file.type = APP_ITEM_TYPES.file;
+        file.new = true;
+
+        const idx = this.items.push(file) - 1;
+
+        this.items[idx].offset = this.getDesktopItemPosition(idx);
+        this.windows[wIdx].fileId = fileId;
+      }
     },
 
     /**
@@ -821,13 +1065,13 @@ export default {
       const { name, appName } = app.appConfig;
       const component = Vue.options.components[appName];
       const title = name + (file && (' - ' + file.fileName) || '');
-      
+    
       if (component) {
         this.createWindow(
           title,
           component,
-          170,
-          170,
+          null,
+          null,
           file && file.id || null
         );
       }
@@ -837,6 +1081,16 @@ export default {
      * @desc Creates new window
      */
     createWindow(title, component, x, y, id) {
+      const lastFocusedWindowId = this.windowFocusSequence.slice(-1)[0];
+      const lastFocusedWindow = this.windows.find(w => w.id === lastFocusedWindowId); 
+
+      // Re-position new window 
+      // after last focused window
+      if (lastFocusedWindow) {
+        !x && (x = lastFocusedWindow.offset.left + 20);
+        !y && (y = lastFocusedWindow.offset.top + 20);
+      }
+      
       const window = {
         id: id || this.helpers.randid(),
         type: APP_ITEM_TYPES.window,
@@ -846,7 +1100,8 @@ export default {
         minimized: false,
         userInteracting: false,
         drag: { x: 0, y: 0 },
-        offset: { top: y, left: x },
+        offset: { 
+          top: y || 170, left: x || 170 },
         cssVariables: {},
       };
 
@@ -1060,24 +1315,27 @@ export default {
      * @desc
      */
     organizeItems() {
-      const grid = this.getDesktopGrid();
-
       this.items.map((item, idx) => {
-        const column = this.items.length > grid.totalItemsInColumn
+        item.offset = this.getDesktopItemPosition(idx);
+        return item;
+      });
+    },
+
+    /**
+     * @desc
+     * @param idx -
+     */
+    getDesktopItemPosition(idx) {
+      const grid = this.getDesktopGrid();
+      const column = this.items.length > grid.totalItemsInColumn
           ? parseInt((idx / (grid.totalItemsInColumn % this.items.length))) 
           : 0
         ;
-        const startTop = grid.top + 20;
-        const top = ((idx % (grid.totalItemsInColumn)) * this.ui.default.file.height) + startTop;
-        const left = (column * this.ui.default.file.width) + 20;
-        
-        item.offset = { 
-          top,
-          left
-        };
+      const startTop = grid.top + 20;
+      const top = ((idx % (grid.totalItemsInColumn)) * this.ui.default.file.height) + startTop;
+      const left = (column * this.ui.default.file.width) + 20;
 
-        return item;
-      });
+      return { top, left };
     },
 
     /**
@@ -1138,14 +1396,14 @@ export default {
 
     /**
      * @desc
-     * @fileId -
+     * @param fileId -
      */
-    getFileContent(fileId) {
-      if (fileId) return undefined;
-      const file = this.files.find(file => file.id === fileId);
-      console.log('asd',fileId)
-      if (file && file.content) {
-        return file.content;
+    getFile(fileId) {
+      if (!fileId) return;
+      const file = this.items.find(file => file.id === fileId);
+
+      if (file) {
+        return file;
       }
     },
 
@@ -1308,6 +1566,7 @@ $z: 8888;
   --bg: url("https://4kwallpapers.com/images/wallpapers/lake-mountains-rocks-twilight-sunset-starry-sky-purple-sky-1920x1080-3768.jpg");
   --primary-bg-color: rgba(16, 18, 27, 0.7);
   --primary-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.75);
+  --primary-text-shadow: 0 0 3px rgb(0 0 0 / 75%);
   --window-radius: 18px;
   --vueos-transition-fn: cubic-bezier(0.19, 1, 0.22, 1);
 }
@@ -1589,9 +1848,6 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
 
 .desktop-item {
   position: fixed;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   user-select: none;
   cursor: pointer;
   width: 90px;
@@ -1601,6 +1857,12 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
       opacity: 1;
     }
   }
+}
+
+.desktop-item .wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 /* ------ --------- ----------
@@ -1655,6 +1917,7 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
   overflow: hidden;
   text-align: center;
   white-space: nowrap;
+  text-shadow: var(--primary-text-shadow);
 }
 
 .desktop-item.app {
@@ -1680,6 +1943,21 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
     overflow: visible;
     word-break: break-all;
     white-space: normal;
+  }
+}
+
+.desktop-item.new {
+  @keyframes newFile {
+    0% {
+      transform: scale(0);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  .wrapper {
+    animation-delay: 0.1s;
+    animation: newFile 0.3s var(--vueos-transition-fn);
   }
 }
 
@@ -1713,6 +1991,13 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
       text-align: center;
       cursor: pointer;
       color: $controls-color;
+      transition: color 0.3s var(--vueos-transition-fn);
+      &:hover {
+        color: #ffffff;
+        [class^="menu"] {
+          background: #ffffff;
+        }
+      }
     }
     [data-role="bold"] {
       font-weight: bold;
@@ -1728,13 +2013,12 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
   [class^="menu"] {
     position: relative;
     top: 48%;
-    
     display: block;
     width: 65%;
     height: 2px;
     margin: 0 auto;
     background: $controls-color;
-    
+    transition: background 0.3s var(--vueos-transition-fn);
     &:before {
       @extend [class^="menu"];
       content: '';
@@ -1761,8 +2045,14 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
   }
 
   .save {
+    display: flex !important;
+    align-items: center;
+    width: auto !important;
     margin-left: auto;
     margin-right: 10px;
+    i {
+      margin-left: 10px;
+    }
   }
   
   .editor-content {
@@ -1782,5 +2072,133 @@ $vue-anim-primary-color: rgba(255, 255, 255, 0);
     font-size: 14px;
     @include scrollbar();
   }
+
+  .app-content {
+    height: 100%;
+  }
 }
+
+button.button {
+  position: relative;
+  display: flex;
+  border: none;
+  box-shadow: none;
+  background-color: #57f9b0;
+  border-radius: 20px;
+  flex-direction: column;
+  align-items: center;
+  color: #060606;
+  font-weight: 600;
+  font-size: 12px;
+  width: 100px;
+  height: 30px;
+  justify-content: center;
+  transition: box-shadow 0.3s var(--vueos-transition-fn), transform 0.3s var(--vueos-transition-fn);
+  box-shadow: 0 10px 8px -7px rgb(34 125 84 / 0%);
+  cursor: pointer;
+  cursor: pointer;
+  i {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transition: all 0.3s var(--vueos-transition-fn);
+    transform: translateY(15px) translateX(100%);
+    opacity: 0;
+    color: #57f9b0;
+    user-select: none;
+  }
+  &:hover {
+    //box-shadow: 0 10px 8px -7px #227d54;
+    i {
+      transform: translateY(15px) translateX(-50%);
+      opacity: 1;
+    }
+  }
+}
+
+.form-element {
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  width: 100%;
+  height: 30px;
+}
+
+.form-element:hover {
+  input[type="text"] {
+    background-color: transparentize(#fff, 0.1);
+  }
+}
+
+.form-element .label {
+  display: flex;
+  align-items: center;
+  color: #e8e8e8;
+  font-size: 12px;
+  border: 2px solid #ffffff;
+  height: 100%;
+  padding-right: 10px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  padding-left: 10px;
+  background: #352256;
+  border-radius: 8px 0 0 8px;
+}
+
+input[type="text"] {
+  background-color: #ffffff;
+  font-size: 12px;
+  border: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  transition: background-color 0.3s var(--vueos-transition-fn);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  &:focus {
+    background-color: transparentize(#fff, 0.1);
+  }
+}
+
+/* ------ --------- ----------
+    * Component: Save
+    * ------ --------- --------
+    */
+[component="Save"] {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+  opacity: 0;
+  top: 45px;
+  left: 50%;
+  width: calc(100% - 20px);
+  height: 50px;
+  z-index: 999;
+  transform: translateX(-50%) translateY(-40px);
+  transition: all 0.3s var(--vueos-transition-fn);
+  border-radius: 16px;
+  padding: 10px;
+  .form {
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+  input {
+    border-radius: 0;
+  }
+  button {
+    border-radius: 0 8px 8px 0;    
+  }
+  &.shown {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+
 </style>
